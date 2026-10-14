@@ -35,6 +35,7 @@ def parse_args(argv=None):
     p.add_argument('--camera', choices=['realsense', 'ros', 'sim'], default='realsense')
     p.add_argument('--color-topic', default='/camera/camera/color/image_raw')
     p.add_argument('--info-topic', default='/camera/camera/color/camera_info')
+    p.add_argument('--model', default='D435I', help='RealSense model to use when --serial is not given')
     p.add_argument('--serial', help='RealSense serial number (if several cameras)')
     p.add_argument('--mode', choices=['manual', 'auto'], default='manual')
     p.add_argument('--n', type=int, default=15, help='auto: number of poses to try')
@@ -114,7 +115,7 @@ def main(argv=None):
 
         if args.camera == 'realsense':
             from calibration.camera import RealSenseCamera
-            cam = RealSenseCamera(serial=args.serial, depth=False)
+            cam = RealSenseCamera(serial=args.serial, depth=False, model=args.model)
         elif args.camera == 'ros':
             from calibration.camera import RosCamera
             cam = RosCamera(io.node, io.pump, args.color_topic, args.info_topic, depth_topic='')

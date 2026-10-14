@@ -22,15 +22,42 @@ class Intrinsics:
         Path(path).write_text(json.dumps(self.to_dict(), indent=2))
 
 
+def list_devices():
+    """[(name, serial, firmware, usb)] for every connected RealSense (USB, not Ethernet)."""
+    import pyrealsense2 as rs
+    out = []
+    for d in rs.context().query_devices():
+        info = lambda k: d.get_info(k) if d.supports(k) else '?'
+        out.append((info(rs.camera_info.name), info(rs.camera_info.serial_number),
+                    info(rs.camera_info.firmware_version), info(rs.camera_info.usb_type_descriptor)))
+    return out
+
+
+def select_device(serial=None, model='D435I'):
+    """Pick the camera by serial, else by model name; refuse when ambiguous (e.g. a D405 is also plugged in)."""
+    devs = list_devices()
+    if not devs:
+        raise RuntimeError('no RealSense found (USB cable / USB3 port / udev rules?)')
+    if serial:
+        if serial not in [d[1] for d in devs]:
+            raise RuntimeError(f'serial {serial} not connected; devices: {devs}')
+        return serial
+    match = [d for d in devs if model.upper() in d[0].upper().replace(' ', '')]
+    if len(match) != 1:
+        raise RuntimeError(f'{len(match)} devices match model {model!r}; pass --serial. Devices: {devs}')
+    return match[0][1]
+
+
 class RealSenseCamera:
     """Direct SDK access. Do not run at the same time as a realsense2_camera ROS node."""
 
-    def __init__(self, width=1280, height=720, fps=30, serial=None, depth=True):
+    def __init__(self, width=1280, height=720, fps=30, serial=None, depth=True, model='D435I'):
         import pyrealsense2 as rs
         self.rs = rs
+        serial = select_device(serial, model)
+        self.serial = serial
         self.pipe, cfg = rs.pipeline(), rs.config()
-        if serial:
-            cfg.enable_device(serial)
+        cfg.enable_device(serial)
         cfg.enable_stream(rs.stream.color, width, height, rs.format.bgr8, fps)
         self.depth = depth
         if depth:
@@ -41,7 +68,7 @@ class RealSenseCamera:
         vs = prof.get_stream(rs.stream.color).as_video_stream_profile()
         i = vs.get_intrinsics()
         K = [[i.fx, 0, i.ppx], [0, i.fy, i.ppy], [0, 0, 1]]
-        self.intr = Intrinsics(K, list(i.coeffs)[:5], (i.width, i.height), f'realsense {i.model}')
+        self.intr = Intrinsics(K, list(i.coeffs)[:5], (i.width, i.height), f'realsense {serial} {i.model}')
         for _ in range(30):                  # let auto-exposure settle
             self.pipe.wait_for_frames()
 

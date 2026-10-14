@@ -22,6 +22,7 @@ def main():
     p.add_argument('--camera', choices=['realsense', 'ros'], default='realsense')
     p.add_argument('--color-topic', default='/camera/camera/color/image_raw')
     p.add_argument('--info-topic', default='/camera/camera/color/camera_info')
+    p.add_argument('--model', default='D435I', help='RealSense model to use when --serial is not given')
     p.add_argument('--serial')
     p.add_argument('--frames', type=int, default=10)
     p.add_argument('--out', default='calib/camera_check')
@@ -32,12 +33,13 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     io = None
     if a.camera == 'realsense':
-        import pyrealsense2 as rs
-        devs = [(d.get_info(rs.camera_info.name), d.get_info(rs.camera_info.serial_number),
-                 d.get_info(rs.camera_info.firmware_version)) for d in rs.context().query_devices()]
-        print('RealSense devices:', devs or 'NONE FOUND')
+        from calibration.camera import list_devices
+        devs = list_devices()
+        print('RealSense devices (name, serial, firmware, USB):')
+        for d in devs:
+            print('   ', d, '  <-- USB2: use a USB3 port' if str(d[3]).startswith('2') else '')
         from calibration.camera import RealSenseCamera
-        cam = RealSenseCamera(serial=a.serial, depth=True)
+        cam = RealSenseCamera(serial=a.serial, depth=True, model=a.model)
     else:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
         from calibration.robot_io import RobotIO

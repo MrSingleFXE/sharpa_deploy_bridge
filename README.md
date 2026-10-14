@@ -105,7 +105,10 @@ source ~/bodex_sharpa_deploy/venv/bin/activate      # 之后每个标定终端�
 python3 calibration/test_offline.py                 # 应输出 ALL OK（不需要相机和机器人）
 ```
 
-- 相机接 **USB 3** 口。`pyrealsense2` 读相机需要 RealSense 的 udev 规则；若报 "No device connected" 或权限错误，
+- RealSense 走 **USB**（不是网线），所以臂和手的网线不影响。主机上同时接着 D405 时，脚本默认按型号只选 **D435I**；
+  型号匹配不唯一就拒绝运行并列出所有设备，此时用 `--serial <序列号>` 指定（序列号见下面 camera_check 的输出）。
+  用 ROS 方式时，启动相机节点也要指定序列号：`ros2 launch realsense2_camera rs_launch.py serial_no:="'<序列号>'" align_depth.enable:=true`。
+- 相机接 **USB 3** 口（camera_check 会显示 USB 版本，2.x 会提示换口）。`pyrealsense2` 读相机需要 RealSense 的 udev 规则；若报 "No device connected" 或权限错误，
   请管理员安装 librealsense 的 udev 规则（或 `sudo apt install ros-jazzy-realsense2-camera`，它会一起装好）。
 - 不想用 pip 的 pyrealsense2 也可以：管理员装 `ros-jazzy-realsense2-camera`，用 ROS 话题读相机，下文命令加
   `--camera ros`（需用 `ros2 launch realsense2_camera rs_launch.py align_depth.enable:=true` 启动相机；
@@ -135,7 +138,7 @@ python3 calibration/make_board.py --out calib/board --set-measured 0.0300 0.0220
 python3 calibration/camera_check.py --board calib/board/board.json            # 或 --camera ros
 ```
 
-期望：列出 D435i 设备；`board detected in 10/10 frames`；`reproj` < 0.5 px；`position jitter` < 1–2 mm。
+期望：列出所有 RealSense（名称、序列号、固件、USB 版本），自动选中 D435I；`board detected in 10/10 frames`；`reproj` < 0.5 px；`position jitter` < 1–2 mm。
 看 `calib/camera_check/camera_check.png`：板上画出了坐标轴。识别不到时检查光照、反光、板是否在画面中。
 
 ## 3. 把标定板装到右手上
