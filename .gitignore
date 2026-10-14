@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.DS_Store
+# generated on the robot host / test machines
+calib/
+runs/
+grasp_plan.json
+plan_*.json
+!examples/plan_mock_exec.json

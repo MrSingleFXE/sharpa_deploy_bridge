@@ -1,0 +1,119 @@
+{
+  "yaw_deg": 285.0,
+  "arm_motion_rad": 1.9865231210430203,
+  "min_clearance_m": 0.1489,
+  "min_clearance_link": "right_ring_fingertip",
+  "min_left_arm_distance_check_m": 0.2,
+  "virtual_scene_table_world_z": 0.1417,
+  "total_duration_s": 74.35,
+  "segments": [
+    {
+      "name": "1_arm_to_approach",
+      "duration_s": 44.82,
+      "arm_max_delta_deg": 113.82,
+      "hand_max_delta_deg": 0.0
+    },
+    {
+      "name": "2_hand_to_pregrasp",
+      "duration_s": 12.02,
+      "arm_max_delta_deg": 0.0,
+      "hand_max_delta_deg": 61.05
+    },
+    {
+      "name": "3_descend_to_pregrasp",
+      "duration_s": 4.26,
+      "arm_max_delta_deg": 10.77,
+      "hand_max_delta_deg": 0.0
+    },
+    {
+      "name": "4_pregrasp_to_grasp",
+      "duration_s": 3.0,
+      "arm_max_delta_deg": 1.68,
+      "hand_max_delta_deg": 5.0
+    },
+    {
+      "name": "5_grasp_to_squeeze",
+      "duration_s": 3.0,
+      "arm_max_delta_deg": 0.0,
+      "hand_max_delta_deg": 5.0
+    },
+    {
+      "name": "r1_hand_open_to_pregrasp",
+      "duration_s": 3.0,
+      "arm_max_delta_deg": 0.0,
+      "hand_max_delta_deg": 10.0
+    },
+    {
+      "name": "r2_lift",
+      "duration_s": 4.26,
+      "arm_max_delta_deg": 10.76,
+      "hand_max_delta_deg": 0.0
+    }
+  ],
+  "wrist_world_xyz": {
+    "pregrasp": [
+      0.6183,
+      -0.7653,
+      0.3331
+    ],
+    "grasp": [
+      0.6201,
+      -0.7657,
+      0.331
+    ],
+    "squeeze": [
+      0.6201,
+      -0.7657,
+      0.331
+    ]
+  },
+  "rejected_yaws": 0,
+  "grasp": "runs/master_chef_can_pose000_14_grasp.npy#0",
+  "limiter_state": null,
+  "limits": {
+    "rate_hz": 100.0,
+    "table_z": 0.0,
+    "clearance": 0.1,
+    "approach_lift": 0.08
+  },
+  "speeds_deg": {
+    "arm_vel": 5.0,
+    "arm_acc": 10.0,
+    "hand_vel": 10.0,
+    "hand_acc": 20.0
+  },
+  "start": {
+    "arm_deg": [
+      -90.0,
+      -30.0,
+      210.0,
+      0.0,
+      -60.0,
+      0.0
+    ],
+    "hand_deg": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  }
+}
