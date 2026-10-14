@@ -55,7 +55,8 @@ def table_plane(depth, K, X, rng, max_range=2.0, iters=400, thr=0.008, roi=None)
         return None
     P = pw[best[1]]
     c = P.mean(0)
-    nrm = np.linalg.svd(P - c)[2][2]
+    w, V = np.linalg.eigh((P - c).T @ (P - c))
+    nrm = V[:, 0]                                  # smallest-variance direction = plane normal
     tilt = math.degrees(math.acos(min(1.0, abs(nrm[2]))))
     return {'table_z_m': round(float(np.median(P[:, 2])), 4), 'tilt_deg': round(tilt, 2),
             'inlier_ratio': round(float(best[0] / len(pw)), 3), 'points': int(best[0])}

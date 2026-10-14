@@ -59,6 +59,37 @@ def load_grasp(path, index=0):
     return GraspInput(names, wrist, hand, f'{path}#{index}')
 
 
+# ----------------------------------------------------------------- hand mount override
+def load_hand_mount(path, side='right'):
+    """{'right': {'xyz': [..], 'rpy': [..]}} or {'xyz': .., 'rpy': ..} from .json / .yaml (hand_mounts.yaml format)."""
+    text = Path(path).read_text()
+    if str(path).endswith(('.yaml', '.yml')):
+        import yaml
+        d = yaml.safe_load(text)
+    else:
+        d = json.loads(text)
+    d = d.get(side, d)
+    xyz, rpy = [float(v) for v in d['xyz']], [float(v) for v in d['rpy']]
+    if len(xyz) != 3 or len(rpy) != 3 or not np.isfinite(xyz + rpy).all():
+        raise ValueError(f'bad hand mount in {path}')
+    return xyz, rpy
+
+
+def override_hand_mount(urdf_xml, xyz, rpy, joint='right_arm_to_hand'):
+    """Replace the arm-flange -> hand-flange transform in the planning model only (robot/launch unchanged)."""
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(urdf_xml)
+    j = root.find(f"joint[@name='{joint}']")
+    if j is None:
+        raise ValueError(f'{joint} not in robot description')
+    o = j.find('origin')
+    if o is None:
+        o = ET.SubElement(j, 'origin')
+    o.set('xyz', ' '.join(f'{v:.6f}' for v in xyz))
+    o.set('rpy', ' '.join(f'{v:.6f}' for v in rpy))
+    return ET.tostring(root, encoding='unicode')
+
+
 # ----------------------------------------------------------------- config
 @dataclass
 class Limits:
@@ -141,6 +172,17 @@ class Planner:
         self.left_links = ([l for l in self._descendants(self.m.joints['left_J1'].child) if l in self.m.links]
                            if 'left_J1' in self.m.joints else [])
         self.set_left_arm(np.zeros(6))
+        self.obstacles, self.obstacle_clearance = None, 0.0
+        self.hand_links = [l for l in self.check_links if l.startswith('right_') and not l.startswith('right_J')
+                           and 'ee_mount' not in l and 'tcp' not in l]
+
+    def set_obstacles(self, points, clearance=0.02, max_points=3000):
+        """Object points (world). Before the hand reaches pregrasp (segments 1 and 2) every hand link origin must
+        stay this far from them; descent / grasp segments are not checked (contact is intended there)."""
+        pts = np.asarray(points, float)
+        if len(pts) > max_points:
+            pts = pts[np.random.default_rng(0).choice(len(pts), max_points, replace=False)]
+        self.obstacles, self.obstacle_clearance = pts, clearance
 
     def _descendants(self, link):
         out, todo = [], [link]
@@ -239,6 +281,13 @@ class Planner:
                 raise PlanError(f'{seg.name}: hand joint outside URDF limit {bad}')
             c = self.clearance(a, h)
             worst = min(worst, c)
+            if self.obstacles is not None and seg.name[:2] in ('1_', '2_'):
+                poses = self.moving_poses(a, h)
+                H = np.array([poses[l][:3, 3] for l in self.hand_links])
+                d = np.sqrt(((H[:, None] - self.obstacles[None]) ** 2).sum(-1)).min()
+                if d < self.obstacle_clearance:
+                    raise PlanError(f'{seg.name}: hand comes {d:.3f} m from the object before pregrasp '
+                                    f'(need >= {self.obstacle_clearance:.3f})')
             if c[0] < floor:
                 raise PlanError(f'{seg.name}: link {c[1]} only {c[0]:.3f} m above table '
                                 f'(need >= {floor:.3f})')
@@ -321,7 +370,7 @@ class Planner:
         # (minus 5 mm) when the start itself is below the requested clearance.
         start_c = self.clearance(arm_now, hand_now)[0]
         first_floor = min(self.lim.clearance, start_c - 0.005)
-        if first_floor < 0.03:
+        if start_c < 0.03:
             raise PlanError(f'start pose only {start_c:.3f} m above table; move up first')
         worst = min(self.check(seg, floor=first_floor if seg is segs[0] else None) for seg in segs)
         # Final wrist accuracy against requested poses.

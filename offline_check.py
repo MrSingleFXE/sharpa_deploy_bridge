@@ -27,7 +27,13 @@ def main():
     own, rest = p.parse_known_args()
     args = exec_args(rest + ['--urdf', own.urdf])
     grasp = load_grasp(args.grasp, args.index)
-    planner = Planner(Path(own.urdf).read_text(), grasp.joint_names, limits_from(args))
+    urdf = Path(own.urdf).read_text()
+    if args.hand_mount:
+        from bridge.planner import load_hand_mount, override_hand_mount
+        urdf = override_hand_mount(urdf, *load_hand_mount(args.hand_mount))
+    planner = Planner(urdf, grasp.joint_names, limits_from(args))
+    if args.obstacles:
+        planner.set_obstacles(np.load(args.obstacles), args.obstacle_clearance)
     planner.set_left_arm(np.radians(own.left_start_deg))
     plan = planner.plan(grasp, np.radians(own.arm_start_deg), np.zeros(22), anchor=args.anchor,
                         anchor_offset=args.anchor_offset, wrist_frame=args.wrist_frame,

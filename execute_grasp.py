@@ -23,7 +23,8 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from bridge.planner import ARM, Limits, PlanError, Planner, load_grasp  # noqa: E402
+from bridge.planner import (ARM, Limits, PlanError, Planner, load_grasp, load_hand_mount,  # noqa: E402
+                            override_hand_mount)
 
 ARM_TARGETS = '/crx5ia/joint_targets'
 ARM_STATES = '/crx5ia/right/joint_states'
@@ -58,6 +59,11 @@ def parse_args(argv=None):
     p.add_argument('--rate', type=float, default=100.0, help='must match the launch input_rate_hz')
     p.add_argument('--hold', type=float, default=3.0, help='seconds to keep streaming the final hand target')
     p.add_argument('--urdf', help='use this URDF file instead of /bimanual/robot_description')
+    p.add_argument('--hand-mount', help='calibrated hand mount (.json/.yaml, hand_mounts.yaml format); replaces the '
+                                        'arm-flange -> hand-flange transform in the PLANNING model only')
+    p.add_argument('--obstacles', help='object points in world (.npy, e.g. object_world.npy): the hand must keep '
+                                       '--obstacle-clearance from them until it reaches pregrasp')
+    p.add_argument('--obstacle-clearance', type=float, default=0.02)
     p.add_argument('--plan-out', default='grasp_plan.json')
     p.add_argument('--execute', action='store_true', help='actually publish motion')
     p.add_argument('--yes', action='store_true', help='do not pause before each stage')
@@ -165,7 +171,15 @@ def main(argv=None):
 
     arm_now, hand_now = st['arm'].copy(), st['hand'].copy()
     try:
-        planner = Planner(st['urdf'], grasp.joint_names, limits)
+        urdf = st['urdf']
+        mount = None
+        if args.hand_mount:
+            mount = load_hand_mount(args.hand_mount)
+            urdf = override_hand_mount(urdf, *mount)
+            log.info(f'hand mount for planning: xyz {mount[0]} rpy {mount[1]} ({args.hand_mount})')
+        planner = Planner(urdf, grasp.joint_names, limits)
+        if args.obstacles:
+            planner.set_obstacles(np.load(args.obstacles), args.obstacle_clearance)
         if st['left'] is not None:
             planner.set_left_arm(st['left'])
         elif any(n.startswith('left_J') for n in planner.m.joints):
@@ -178,6 +192,8 @@ def main(argv=None):
         return shutdown(rclpy, executor, 3)
 
     report = dict(plan.report, grasp=grasp.source, limiter_state=st['limiter'],
+                  hand_mount=None if not args.hand_mount else {'file': args.hand_mount, 'xyz': mount[0], 'rpy': mount[1]},
+                  obstacles=args.obstacles,
                   limits={k: getattr(limits, k) for k in ('rate_hz', 'table_z', 'clearance', 'approach_lift')},
                   speeds_deg={'arm_vel': args.arm_speed_deg, 'arm_acc': args.arm_accel_deg,
                               'hand_vel': args.hand_speed_deg, 'hand_acc': args.hand_accel_deg},
