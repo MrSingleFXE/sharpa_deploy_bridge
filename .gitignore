@@ -11,3 +11,4 @@ plan_*.json
 # server-only validation tools (contain server paths)
 server_only/
 captures/
+models/

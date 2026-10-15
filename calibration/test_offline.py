@@ -38,6 +38,57 @@ def test_detection():
     assert worst[0] < 3 and worst[1] < 0.5
 
 
+def test_single_targets():
+    K = np.array([[910.0, 0, 640], [0, 910.0, 360], [0, 0, 1]])
+    for spec in (BoardSpec(kind='marker', dictionary='DICT_APRILTAG_36h11', marker_id=3, marker_m=0.10),
+                 BoardSpec(kind='qr', marker_m=0.12)):
+        rng = np.random.default_rng(4)
+        errs = []
+        for k in range(10):
+            rv = rng.normal(0, 0.35, 3)
+            rv *= min(1.0, math.radians(40) / np.linalg.norm(rv))
+            T = to_T(rv, [rng.uniform(-0.12, 0.08), rng.uniform(-0.08, 0.05), rng.uniform(0.5, 0.9)])
+            bp = detect_pose(synth_view(spec, T, K), K, np.zeros(5), spec)
+            assert bp is not None, f'{spec.kind} view {k} not detected'
+            errs.append(err(T, bp.T_cam_board))
+        e = np.array(errs)
+        print(f'{spec.kind:6s} ({spec.dictionary if spec.kind == "marker" else "QR"}, {spec.marker_m * 100:.0f} cm): '
+              f'10/10 detected, median {np.median(e[:, 0]):.2f} mm / {np.median(e[:, 1]):.2f} deg, '
+              f'worst {e[:, 0].max():.2f} mm / {e[:, 1].max():.2f} deg')
+        assert np.median(e[:, 0]) < 5 and np.median(e[:, 1]) < 2.0
+
+
+def test_full_calibration_per_target(n=20):
+    """Full eye-to-hand calibration from rendered images for each target kind: final camera / workspace error."""
+    K = np.array([[910.0, 0, 640], [0, 910.0, 360], [0, 0, 1]])
+    X = to_T([2.25, 0.25, -0.35], [-0.05, -0.45, 0.95])          # camera in world, looking at the right hand
+    rows = []
+    for spec in (BoardSpec(), BoardSpec(kind='marker', dictionary='DICT_APRILTAG_36h11', marker_id=3, marker_m=0.10),
+                 BoardSpec(kind='qr', marker_m=0.12)):
+        rng = np.random.default_rng(7)
+        base = to_T([0, 0, 0], [-0.05, -0.05, 0.75])               # target pose in the CAMERA frame, 0.75 m ahead
+        A, B = [], []
+        Y = to_T([0.2, -0.1, 0.1], [0.03, 0.02, 0.10])              # target on the flange
+        tries = 0
+        while len(A) < n and tries < 200:
+            tries += 1
+            T_world_target = X @ base @ to_T(rng.normal(0, 0.3, 3), rng.uniform(-0.08, 0.08, 3))
+            Ai = T_world_target @ inv(Y)
+            bp = detect_pose(synth_view(spec, inv(X) @ Ai @ Y, K), K, np.zeros(5), spec)
+            if bp is not None:
+                A.append(Ai)
+                B.append(bp.T_cam_board)
+        res = solve(A, B)
+        ex = err(X, res['X'])
+        p_ws = (X @ base)[:3, 3]                                      # a workspace point
+        p_cam = inv(X)[:3, :3] @ p_ws + inv(X)[:3, 3]
+        ws = 1000 * np.linalg.norm(res['X'][:3, :3] @ p_cam + res['X'][:3, 3] - p_ws)
+        rows.append((spec.kind, len(A), ex[0], ex[1], ws, res['loo_workspace_mm']))
+        print(f'full calibration with {spec.kind:7s}: {len(A)} samples, camera error {ex[0]:.2f} mm / {ex[1]:.3f} deg, '
+              f'workspace point error {ws:.2f} mm, leave-one-out {res["loo_workspace_mm"]}')
+    assert all(r[4] < 5 for r in rows)
+
+
 def test_solver():
     rng = np.random.default_rng(2)
     X = to_T([2.2, 0.1, -0.4], [0.3, -0.45, 0.9])          # camera in world
@@ -80,6 +131,8 @@ if __name__ == '__main__':
     import cv2
     print('OpenCV', cv2.__version__)
     test_detection()
+    test_single_targets()
+    test_full_calibration_per_target()
     test_solver()
     test_table_plane()
     print('ALL OK')

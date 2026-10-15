@@ -54,14 +54,16 @@ def main():
         res.append(detect_pose(color, cam.intr.K, cam.intr.dist, spec))
     fps = a.frames / (time.time() - t0)
     ok = [r for r in res if r is not None]
-    print(f'{fps:.1f} fps, board detected in {len(ok)}/{len(res)} frames')
+    print(f'target: {spec.kind} ({spec.dictionary if spec.kind != "qr" else "QR"}), {fps:.1f} fps, '
+          f'board detected in {len(ok)}/{len(res)} frames')
     if ok:
         r = ok[-1]
         d = [x.T_cam_board[:3, 3] for x in ok]
         print(f'corners {r.corners}, reproj {r.reproj_px:.2f} px, distance {r.T_cam_board[2, 3]:.3f} m, '
               f'position jitter {1000 * np.max(np.ptp(d, axis=0)):.2f} mm')
         rvec = cv2.Rodrigues(r.T_cam_board[:3, :3])[0]
-        cv2.drawFrameAxes(color, cam.intr.K, cam.intr.dist, rvec, r.T_cam_board[:3, 3], spec.square_m * 2)
+        cv2.drawFrameAxes(color, cam.intr.K, cam.intr.dist, rvec, r.T_cam_board[:3, 3],
+                          spec.square_m * 2 if spec.kind == 'charuco' else spec.marker_m / 2)
     cv2.imwrite(str(out / 'camera_check.png'), color)
     print(f'saved {out / "camera_check.png"}')
     cam.close()

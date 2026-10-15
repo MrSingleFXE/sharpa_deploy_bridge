@@ -40,12 +40,18 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('sessions', nargs='+', help='collection folders')
     p.add_argument('--out', default='calib/camera_extrinsics.json')
-    p.add_argument('--max-reproj-px', type=float, default=1.0, help='drop captures with larger PnP error')
-    p.add_argument('--max-spread-mm', type=float, default=2.0, help='drop captures whose frames disagree more')
+    p.add_argument('--max-reproj-px', type=float, help='drop captures with larger PnP error (default 1.0; QR 2.0)')
+    p.add_argument('--max-spread-mm', type=float, help='drop captures whose frames disagree more (default 2; QR 5)')
     p.add_argument('--no-outlier-drop', action='store_true')
     args = p.parse_args(argv)
 
     A, B, used, dropped, intr = [], [], [], [], None
+    if args.max_reproj_px is None:
+        kind = json.loads((Path(args.sessions[0]) / 'board.json').read_text()).get('kind', 'charuco')
+        args.max_reproj_px = 2.0 if kind == 'qr' else 1.0
+    if args.max_spread_mm is None:
+        kind = json.loads((Path(args.sessions[0]) / 'board.json').read_text()).get('kind', 'charuco')
+        args.max_spread_mm = 5.0 if kind == 'qr' else 2.0
     for s in args.sessions:
         s = Path(s)
         this_intr = json.loads((s / 'intrinsics.json').read_text())

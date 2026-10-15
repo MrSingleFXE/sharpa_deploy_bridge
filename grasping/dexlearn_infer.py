@@ -28,31 +28,54 @@ DEFAULT_EXP = 'bodex_tabletop_sharpa_right_nflow_tabletop_seed_v3_s34_kp12_alpha
 TRAIN_CENTER = (0.753, 0.004)          # median object xy in the training scenes (5-95 %: x 0.705-0.796, y -0.042-0.045)
 
 
-def load_model(root, exp, step, device):
+def load_model(code_root, model_dir, device):
+    """code_root: DexLearn repository (python package `dexlearn`); model_dir: bundle with config.yaml + one *.pth
+    (and MANIFEST.json with sha256), or a DexLearn experiment folder (.hydra/config.yaml + ckpts/step_XXXXXX.pth)."""
     import torch
     from omegaconf import OmegaConf
-    sys.path.insert(0, str(root))
-    from dexlearn.network.models import BaseModel  # noqa: F401  (resolved by name below)
+    sys.path.insert(0, str(Path(code_root).expanduser()))
     import dexlearn.network.models as models
-    exp_dir = Path(root) / 'output' / exp
-    cfg = OmegaConf.load(exp_dir / '.hydra' / 'config.yaml')
-    ckpt_path = exp_dir / 'ckpts' / f'step_{step:06d}.pth'
+    model_dir = Path(model_dir).expanduser()
+    if (model_dir / 'config.yaml').exists():
+        cfg = OmegaConf.load(model_dir / 'config.yaml')
+        ckpts = sorted(model_dir.glob('*.pth'))
+        if len(ckpts) != 1:
+            raise FileNotFoundError(f'expected exactly one .pth in {model_dir}')
+        ckpt_path = ckpts[0]
+    else:
+        cfg = OmegaConf.load(model_dir.parent.parent / '.hydra' / 'config.yaml')   # .../<exp>/ckpts/step_X.pth
+        ckpt_path = model_dir
     ckpt = torch.load(ckpt_path, map_location='cpu')
     if ckpt.get('hand_model_id') != cfg.data.hand_model_id or list(ckpt.get('joint_names', [])) != list(cfg.data.joint_names):
-        raise ValueError('checkpoint hand identity / joint order does not match the experiment config')
+        raise ValueError('checkpoint hand identity / joint order does not match the config')
     model = getattr(models, cfg.algo.model.name)(cfg.algo.model)
     model.load_state_dict(ckpt['model'])
     model.to(device).eval()
     return model, cfg, ckpt, ckpt_path
 
 
+def pick_device(requested):
+    import torch
+    if requested != 'auto':
+        return requested
+    if torch.cuda.is_available():
+        try:
+            import MinkowskiEngine as ME
+            if ME.is_cuda_available():
+                return 'cuda:0'
+        except Exception:
+            pass
+    return 'cpu'
+
+
 class GraspGenerator:
     """Loads the DexLearn checkpoint once; generate() maps a table-frame object cloud to grasps (table frame)."""
 
-    def __init__(self, root, exp=DEFAULT_EXP, step=50000, device='cuda:0', center=TRAIN_CENTER):
+    def __init__(self, code_root, model_dir, device='auto', center=TRAIN_CENTER):
         import torch
         self.torch = torch
-        self.model, self.cfg, self.ckpt, self.ckpt_path = load_model(root, exp, step, device)
+        device = pick_device(device)
+        self.model, self.cfg, self.ckpt, self.ckpt_path = load_model(code_root, model_dir, device)
         from dexlearn.dataset import get_sparse_tensor
         self.get_sparse_tensor = get_sparse_tensor
         self.device = device
@@ -88,15 +111,15 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('object', help='object_table.npy (table frame, object centred)')
     p.add_argument('--out', required=True)
-    p.add_argument('--dexlearn-root', default=os.environ.get('DEXLEARN_ROOT', os.path.expanduser('~/DexLearn')),
-                   help='DexLearn repository with output/<exp>/ckpts (env DEXLEARN_ROOT)')
-    p.add_argument('--exp', default=DEFAULT_EXP)
-    p.add_argument('--step', type=int, default=50000)
+    p.add_argument('--dexlearn-root', default=os.environ.get('DEXLEARN_ROOT', '~/bodex_sharpa_deploy/DexLearn'),
+                   help='DexLearn code repository (env DEXLEARN_ROOT)')
+    p.add_argument('--model', default=os.environ.get('DEXLEARN_MODEL', '~/bodex_sharpa_deploy/models/dexlearn_sharpa_v3_s34_50k'),
+                   help='model bundle folder (config.yaml + .pth) or an experiment ckpt path (env DEXLEARN_MODEL)')
     p.add_argument('--num', type=int, default=200, help='total grasps to sample')
     p.add_argument('--clouds', type=int, default=4, help='random 1024-point subsets (samples split evenly)')
     p.add_argument('--center', type=float, nargs=2, default=TRAIN_CENTER)
     p.add_argument('--seed', type=int, default=0)
-    p.add_argument('--device', default='cuda:0')
+    p.add_argument('--device', default='auto', help='auto (GPU if MinkowskiEngine has CUDA, else cpu), cpu, cuda:0')
     a = p.parse_args(argv)
     import torch
     torch.manual_seed(a.seed)
@@ -105,7 +128,7 @@ def main(argv=None):
         sys.exit(f'bad object cloud {obj.shape}')
     if obj[:, 2].min() < -0.01 or abs(obj[:, 0].mean()) > 0.02 or abs(obj[:, 1].mean()) > 0.02:
         print('WARNING: cloud does not look like a table-frame, centred object (z >= 0, xy mean ~ 0)')
-    gen = GraspGenerator(a.dexlearn_root, a.exp, a.step, a.device, a.center)
+    gen = GraspGenerator(a.dexlearn_root, a.model, a.device, a.center)
     cfg, ckpt, ckpt_path = gen.cfg, gen.ckpt, gen.ckpt_path
     t0 = time.time()
     pose, lp = gen.generate(obj, a.num, a.clouds, np.random.default_rng(a.seed))
@@ -119,7 +142,7 @@ def main(argv=None):
     np.save(out / 'grasps_table.npy', res, allow_pickle=True)
     info = {'checkpoint': str(ckpt_path), 'iter': int(ckpt.get('iter', -1)), 'hand_model_id': cfg.data.hand_model_id,
             'num': int(len(pose)), 'clouds': a.clouds, 'points_per_cloud': n_pts, 'train_center_xy': list(a.center),
-            'object_points': int(len(obj)), 'runtime_s': round(dt, 2), 'device': a.device,
+            'object_points': int(len(obj)), 'runtime_s': round(dt, 2), 'device': gen.device,
             'log_prob': {'max': float(lp.max()), 'median': float(np.median(lp)), 'min': float(lp.min())},
             'wrist_height_above_table_m': {'median': float(np.median(pose[:, 1, 2])), 'min': float(pose[:, 1, 2].min())}}
     (out / 'infer.json').write_text(json.dumps(info, indent=2))

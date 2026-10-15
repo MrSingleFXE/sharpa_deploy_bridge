@@ -22,6 +22,8 @@ def main():
     p.add_argument('--dictionary', default='DICT_5X5_100')
     p.add_argument('--set-measured', type=float, nargs=2, metavar=('SQUARE_M', 'MARKER_M'),
                    help='only update board.json with caliper-measured sizes')
+    p.add_argument('--apriltag', type=float, metavar='SIDE_M',
+                   help='instead of the ChArUco board: one AprilTag 36h11 (id 0) with this black-square side, e.g. 0.12')
     a = p.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -31,9 +33,26 @@ def main():
         spec.save(out / 'board.json')
         print(f'updated {out / "board.json"}: square {spec.square_m} m, marker {spec.marker_m} m')
         return
+    if a.apriltag:
+        import cv2
+        from calibration.board import render_single
+        spec = BoardSpec(kind='marker', dictionary='DICT_APRILTAG_36h11', marker_id=0, marker_m=a.apriltag)
+        px_per_m = 300 / 0.0254
+        img, _ = render_single(spec, px_per_m)
+        cv2.imwrite(str(out / 'apriltag_print_300dpi.png'), img)
+        try:
+            from PIL import Image
+            Image.fromarray(img).save(out / 'apriltag_print.pdf', resolution=300)
+        except ImportError:
+            pass
+        spec.save(out / 'board.json')
+        print(f'AprilTag 36h11 id 0, black square {a.apriltag * 1000:.0f} mm. Print at 100 %, measure the black square, '
+              f'then: python3 calibration/identify_target.py --size-m <measured>. Files in {out}/')
+        return
     if a.squares[1] % 2 == 0:
         sys.exit('use an odd number of rows (OpenCV 4.6/4.7 pattern compatibility)')
-    spec = BoardSpec(a.squares[0], a.squares[1], a.square_m, a.marker_m, a.dictionary)
+    spec = BoardSpec(kind='charuco', squares_x=a.squares[0], squares_y=a.squares[1], square_m=a.square_m,
+                     marker_m=a.marker_m, dictionary=a.dictionary)
     dpi = 300
     px_per_m = dpi / 0.0254
     import cv2
