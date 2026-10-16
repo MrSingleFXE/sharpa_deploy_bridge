@@ -301,7 +301,26 @@ python3 calibration/verify_extrinsics.py --camera ros --extrinsics calib/camera_
 的固定变换，现在实验室配置里是占位值（平移 0）。**原理**：相机标好后，深度能看到手的真实位置，关节角给出法兰位置；用 Sharpa
 手自己的 CAD 网格去贴合多个视角的深度点云，求出这个变换。仿真：从偏 13 mm / 40° 的初值恢复到 0.4 mm / 0.1°。
 
-### C.1 采集 5–8 个视角（只读 launch 同 B.3；相机驱动已停（K1）；拆掉标定板；手保持一个姿态，例如张开）
+### C.1 采集 5–8 个视角（拆掉标定板、装回右手；手保持一个姿态，例如张开）
+
+只开两个终端：**L-real** 和 **T-real**。**不要开 K1 相机驱动**（如果还开着就 Ctrl+C 停掉）：本步脚本自己直接打开 D415，
+两边同时占用相机会打不开。FANUC 状态同 B.3（不开 Free hand teaching，示教器点动，低速）。
+
+与 B.3 的区别：手已装回，要读**真手**的关节角（ICP 用它摆放手的网格），所以 `sharpa_backend:=sharpa_sdk`。
+`read_only:=true` 会同时传给手节点：手只读状态，拒绝一切运动指令，也不切换 MIT 控制模式。
+
+```bash
+# 终端 L-real：右臂真机只读 + 右手真机只读
+source /opt/ros/jazzy/setup.bash
+source ~/ws_fanuc/install/setup.bash
+export PYTHONPATH=/opt/sharpa-wave-sdk/python:$PYTHONPATH
+export LD_LIBRARY_PATH=/opt/sharpa-wave-sdk/lib:$LD_LIBRARY_PATH
+export ROS_DOMAIN_ID=87
+unset ROS_AUTOMATIC_DISCOVERY_RANGE
+ros2 launch bimanual_manipulation single_arm_hand.launch.py prefix:=right_ crx_mock:=false sharpa_backend:=sharpa_sdk read_only:=true rviz:=true
+```
+
+预期：RViz 里右臂随示教器点动，右手的手指姿态与真手一致（用手轻轻掰一下手指能看到 RViz 跟着变则说明读到的是真手）。
 
 ```bash
 # 终端 T-real
@@ -313,7 +332,7 @@ source ~/bodex_sharpa_deploy/venv/bin/activate
 export ROS_DOMAIN_ID=87
 unset ROS_AUTOMATIC_DISCOVERY_RANGE
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
-python3 calibration/collect_hand_views.py --out calib/hand_views --table-z <B.7 的 table_z_m>
+python3 calibration/collect_hand_views.py --out calib/hand_views --table-z -0.157   # B.7 verify 得到的 table_z_m
 ```
 
 操作：示教器把右臂移到手完整入镜、离相机 0.5–0.9 m、离桌面和其他物体远一些的位置，每次换一个腕部朝向，停稳按 Enter。
