@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Offline self-test (no ROS, no camera): board detection on rendered images + hand-eye solver on noisy data.
+"""Offline self-test (no ROS, no camera): ChArUco detection on rendered images, the industrial_calibration
+target-finder config, and the depth table-plane fit used by verify_extrinsics.py.
 
     python3 calibration/test_offline.py
 """
@@ -7,16 +8,19 @@ import math
 import sys
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from calibration.board import BoardSpec, detect_pose, synth_view  # noqa: E402
-from calibration.handeye import inv, log_err, solve, to_T  # noqa: E402
+from calibration.ic_config import inv  # noqa: E402
 
 
-def err(Ta, Tb):
-    r, t = log_err(inv(Ta) @ Tb)
-    return 1000 * np.linalg.norm(t), math.degrees(np.linalg.norm(r))
+def to_T(rv, t):
+    T = np.eye(4)
+    T[:3, :3] = cv2.Rodrigues(np.asarray(rv, float))[0]
+    T[:3, 3] = t
+    return T
 
 
 def test_detection():
@@ -26,113 +30,50 @@ def test_detection():
     worst = (0, 0)
     for k in range(10):
         rv = rng.normal(0, 0.35, 3)
-        rv *= min(1.0, math.radians(45) / np.linalg.norm(rv))        # recommended tilt range (<= 45 deg)
-        T = to_T(rv, [rng.uniform(-0.15, 0.1), rng.uniform(-0.1, 0.05),
-                                                             rng.uniform(0.5, 1.0)])
-        img = synth_view(spec, T, K)
-        bp = detect_pose(img, K, np.zeros(5), spec)
+        rv *= min(1.0, math.radians(45) / np.linalg.norm(rv))
+        T = to_T(rv, [rng.uniform(-0.15, 0.1), rng.uniform(-0.1, 0.05), rng.uniform(0.5, 1.0)])
+        bp = detect_pose(synth_view(spec, T, K), K, np.zeros(5), spec)
         assert bp is not None, f'view {k} not detected'
-        e = err(T, bp.T_cam_board)
+        D = inv(T) @ bp.T_cam_board
+        e = (1000 * np.linalg.norm(D[:3, 3]), math.degrees(np.linalg.norm(cv2.Rodrigues(D[:3, :3])[0])))
         worst = (max(worst[0], e[0]), max(worst[1], e[1]))
-    print(f'detection: 10/10 views, worst error {worst[0]:.2f} mm / {worst[1]:.3f} deg')
+    print(f'ChArUco detection: 10/10 views, worst error {worst[0]:.2f} mm / {worst[1]:.3f} deg')
     assert worst[0] < 3 and worst[1] < 0.5
 
 
-def test_single_targets():
-    K = np.array([[910.0, 0, 640], [0, 910.0, 360], [0, 0, 1]])
-    for spec in (BoardSpec(kind='marker', dictionary='DICT_APRILTAG_36h11', marker_id=3, marker_m=0.10),
-                 BoardSpec(kind='qr', marker_m=0.12)):
-        rng = np.random.default_rng(4)
-        errs = []
-        for k in range(10):
-            rv = rng.normal(0, 0.35, 3)
-            rv *= min(1.0, math.radians(40) / np.linalg.norm(rv))
-            T = to_T(rv, [rng.uniform(-0.12, 0.08), rng.uniform(-0.08, 0.05), rng.uniform(0.5, 0.9)])
-            bp = detect_pose(synth_view(spec, T, K), K, np.zeros(5), spec)
-            assert bp is not None, f'{spec.kind} view {k} not detected'
-            errs.append(err(T, bp.T_cam_board))
-        e = np.array(errs)
-        print(f'{spec.kind:6s} ({spec.dictionary if spec.kind == "marker" else "QR"}, {spec.marker_m * 100:.0f} cm): '
-              f'10/10 detected, median {np.median(e[:, 0]):.2f} mm / {np.median(e[:, 1]):.2f} deg, '
-              f'worst {e[:, 0].max():.2f} mm / {e[:, 1].max():.2f} deg')
-        assert np.median(e[:, 0]) < 5 and np.median(e[:, 1]) < 2.0
-
-
-def test_full_calibration_per_target(n=20):
-    """Full eye-to-hand calibration from rendered images for each target kind: final camera / workspace error."""
-    K = np.array([[910.0, 0, 640], [0, 910.0, 360], [0, 0, 1]])
-    X = to_T([2.25, 0.25, -0.35], [-0.05, -0.45, 0.95])          # camera in world, looking at the right hand
-    rows = []
-    for spec in (BoardSpec(), BoardSpec(kind='marker', dictionary='DICT_APRILTAG_36h11', marker_id=3, marker_m=0.10),
-                 BoardSpec(kind='qr', marker_m=0.12)):
-        rng = np.random.default_rng(7)
-        base = to_T([0, 0, 0], [-0.05, -0.05, 0.75])               # target pose in the CAMERA frame, 0.75 m ahead
-        A, B = [], []
-        Y = to_T([0.2, -0.1, 0.1], [0.03, 0.02, 0.10])              # target on the flange
-        tries = 0
-        while len(A) < n and tries < 200:
-            tries += 1
-            T_world_target = X @ base @ to_T(rng.normal(0, 0.3, 3), rng.uniform(-0.08, 0.08, 3))
-            Ai = T_world_target @ inv(Y)
-            bp = detect_pose(synth_view(spec, inv(X) @ Ai @ Y, K), K, np.zeros(5), spec)
-            if bp is not None:
-                A.append(Ai)
-                B.append(bp.T_cam_board)
-        res = solve(A, B)
-        ex = err(X, res['X'])
-        p_ws = (X @ base)[:3, 3]                                      # a workspace point
-        p_cam = inv(X)[:3, :3] @ p_ws + inv(X)[:3, 3]
-        ws = 1000 * np.linalg.norm(res['X'][:3, :3] @ p_cam + res['X'][:3, 3] - p_ws)
-        rows.append((spec.kind, len(A), ex[0], ex[1], ws, res['loo_workspace_mm']))
-        print(f'full calibration with {spec.kind:7s}: {len(A)} samples, camera error {ex[0]:.2f} mm / {ex[1]:.3f} deg, '
-              f'workspace point error {ws:.2f} mm, leave-one-out {res["loo_workspace_mm"]}')
-    assert all(r[4] < 5 for r in rows)
-
-
-def test_solver():
-    rng = np.random.default_rng(2)
-    X = to_T([2.2, 0.1, -0.4], [0.3, -0.45, 0.9])          # camera in world
-    Y = to_T([0.1, -0.2, 0.3], [0.02, 0.05, 0.12])          # board on flange
-    A, B = [], []
-    base = to_T([0, 2.5, 0], [0.55, -0.7, 0.35])
-    for _ in range(15):
-        Ai = base @ to_T(rng.normal(0, 0.35, 3), rng.uniform(-0.06, 0.06, 3))
-        Bi = inv(X) @ Ai @ Y
-        Bi = Bi @ to_T(rng.normal(0, math.radians(0.1), 3), rng.normal(0, 0.0007, 3))   # PnP noise
-        A.append(Ai), B.append(Bi)
-    B[3] = B[3] @ to_T([0, 0, 0], [0.03, 0, 0])             # one gross outlier
-    res = solve(A, B)
-    ex, ey = err(X, res['X']), err(Y, res['Y'])
-    print(f'solver: X error {ex[0]:.2f} mm / {ex[1]:.3f} deg, Y error {ey[0]:.2f} mm / {ey[1]:.3f} deg, '
-          f'kept {len(res["keep"])}/15 (outlier 3 dropped: {3 not in res["keep"]}), init {res["init_method"]}')
-    assert ex[0] < 3 and ex[1] < 0.3 and 3 not in res['keep']
+def test_ic_target_config():
+    tf = BoardSpec(square_m=0.0299, marker_m=0.0219).ic_target_finder()
+    assert tf == {'type': 'CharucoGridTargetFinder', 'rows': 7, 'cols': 5, 'chessboard_dim': 0.0299,
+                  'aruco_marker_dim': 0.0219, 'dictionary': cv2.aruco.DICT_5X5_100}, tf
+    print(f'industrial_calibration target finder config: {tf}')
 
 
 def test_table_plane():
     from calibration.verify_extrinsics import table_plane
     K = np.array([[600.0, 0, 320], [0, 600.0, 240], [0, 0, 1]])
     pos = np.array([-0.05, -0.45, 0.95])
-    z = np.array([0.6, -0.3, -0.75]); z /= np.linalg.norm(z)
-    x = np.cross(z, [0, 0, 1]); x /= np.linalg.norm(x)
-    X = np.eye(4); X[:3, :3] = np.c_[x, np.cross(z, x), z]; X[:3, 3] = pos
+    z = np.array([0.6, -0.3, -0.75])
+    z /= np.linalg.norm(z)
+    x = np.cross(z, [0, 0, 1])
+    x /= np.linalg.norm(x)
+    X = np.eye(4)
+    X[:3, :3] = np.c_[x, np.cross(z, x), z]
+    X[:3, 3] = pos
     table_z = 0.021
     v, u = np.mgrid[0:480, 0:640]
     rays = np.stack([(u - 320) / 600.0, (v - 240) / 600.0, np.ones_like(u, float)], -1) @ X[:3, :3].T
-    depth = ((table_z - pos[2]) / rays[..., 2]).astype(np.float32)         # ray parameter = camera z depth
+    depth = ((table_z - pos[2]) / rays[..., 2]).astype(np.float32)
     depth[(depth < 0) | (depth > 3)] = 0
     depth += np.random.default_rng(0).normal(0, 0.002, depth.shape).astype(np.float32)
-    depth[100:200, 300:400] = 0.6                                           # an object above the table
+    depth[100:200, 300:400] = 0.6
     r = table_plane(depth, K, X, np.random.default_rng(1))
     print(f'table plane: z {r["table_z_m"]} m (true {table_z}), tilt {r["tilt_deg"]} deg')
     assert abs(r['table_z_m'] - table_z) < 0.003
 
 
 if __name__ == '__main__':
-    import cv2
     print('OpenCV', cv2.__version__)
     test_detection()
-    test_single_targets()
-    test_full_calibration_per_target()
-    test_solver()
+    test_ic_target_config()
     test_table_plane()
     print('ALL OK')

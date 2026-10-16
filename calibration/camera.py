@@ -1,4 +1,4 @@
-"""Camera sources: RealSense SDK (pyrealsense2), ROS 2 topics, or a simulated camera for testing.
+"""Camera sources: RealSense SDK (pyrealsense2) or ROS 2 topics (realsense2_camera).
 
 Every source returns (color_bgr uint8 HxWx3, depth_m float32 HxW or None) aligned to the color camera,
 and exposes K (3x3), dist (5,), size (w, h).
@@ -139,30 +139,6 @@ class RosCamera:
                 break
         depth = self._decode(self.msgs['depth']) if self.depth and self.msgs['depth'] is not None else None
         return self._decode(self.msgs['color']), depth
-
-    def close(self):
-        pass
-
-
-class SimCamera:
-    """Renders the board from robot FK and a ground-truth extrinsic (testing only)."""
-
-    def __init__(self, spec, T_world_cam, T_flange_board, flange_pose_fn, size=(1280, 720), noise_px=0.3, seed=0):
-        from .board import synth_view
-        self.synth_view = synth_view
-        f = 910.0
-        K = [[f, 0, size[0] / 2], [0, f, size[1] / 2], [0, 0, 1]]
-        self.intr = Intrinsics(K, [0] * 5, size, 'sim')
-        self.spec, self.X, self.Y, self.flange_pose_fn = spec, T_world_cam, T_flange_board, flange_pose_fn
-        self.rng, self.noise = np.random.default_rng(seed), noise_px
-
-    def grab(self):
-        import cv2
-        T_cam_board = np.linalg.inv(self.X) @ self.flange_pose_fn() @ self.Y
-        img = self.synth_view(self.spec, T_cam_board, self.intr.K, self.intr.size).astype(np.float32)
-        img += self.rng.normal(0, 2.0, img.shape)
-        img = cv2.GaussianBlur(np.clip(img, 0, 255).astype(np.uint8), (3, 3), self.noise)
-        return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR), None
 
     def close(self):
         pass

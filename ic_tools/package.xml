@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>sharpa_ic_tools</name>
+  <version>0.1.0</version>
+  <description>Headless runner for the industrial_calibration extrinsic hand-eye calibration (same API calls as its example)</description>
+  <maintainer email="noreply@example.com">sharpa_deploy_bridge</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>cmake</buildtool_depend>
+  <depend>industrial_calibration</depend>
+  <depend>boost_plugin_loader</depend>
+  <depend>yaml-cpp</depend>
+  <depend>libopencv-dev</depend>
+  <export><build_type>cmake</build_type></export>
+</package>

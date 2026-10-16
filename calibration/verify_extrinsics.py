@@ -4,8 +4,7 @@
 1. Overlay: projects right arm / hand link origins (robot FK + extrinsics) onto the live color image.
    Arm dots should sit on the arm. Hand dots that are consistently off by a few cm point at the
    uncalibrated hand mount (hand_mounts.yaml translation = 0), not at the camera calibration.
-2. Board check (if the board is still mounted): observed board pose vs prediction A*Y -> mm / deg.
-3. Table height: RANSAC plane on the depth cloud (world frame), near-horizontal planes only ->
+2. Table height: RANSAC plane on the depth cloud (world frame), near-horizontal planes only ->
    suggested --table-z for execute_grasp.py.
 Writes <out>/overlay.png and <out>/verify.json.
 """
@@ -20,9 +19,14 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bridge.urdf_kin import URDFModel  # noqa: E402
-from calibration.board import BoardSpec, detect_pose  # noqa: E402
-from calibration.handeye import inv, log_err  # noqa: E402
 from calibration.robot_io import ARM, FLANGE, Abort, RobotIO  # noqa: E402
+
+
+def inv(T):
+    out = np.eye(4)
+    out[:3, :3] = T[:3, :3].T
+    out[:3, 3] = -T[:3, :3].T @ T[:3, 3]
+    return out
 
 
 def table_plane(depth, K, X, rng, max_range=2.0, iters=400, thr=0.008, roi=None):
@@ -65,7 +69,6 @@ def table_plane(depth, K, X, rng, max_range=2.0, iters=400, thr=0.008, roi=None)
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--extrinsics', default='calib/camera_extrinsics.json')
-    p.add_argument('--board', help='board.json; enables the board check')
     p.add_argument('--camera', choices=['realsense', 'ros'], default='realsense')
     p.add_argument('--color-topic', default='/camera/camera/color/image_raw')
     p.add_argument('--info-topic', default='/camera/camera/color/camera_info')
@@ -80,7 +83,7 @@ def main(argv=None):
     import cv2
 
     ext = json.loads(Path(args.extrinsics).read_text())
-    X, Y = np.array(ext['T_world_cam']), np.array(ext['T_flange_board'])
+    X = np.array(ext['T_world_cam'])
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     io = RobotIO('bodex_calib_verify', urdf_path=args.urdf)
@@ -126,18 +129,6 @@ def main(argv=None):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
         cv2.imwrite(str(out / 'overlay.png'), img)
         report['overlay_points'] = drawn
-
-        # 2. board
-        if args.board:
-            bp = detect_pose(color, K, dist, BoardSpec.load(args.board))
-            if bp is None:
-                report['board_check'] = 'board not detected'
-            else:
-                A = model.fk(dict(zip(ARM, io.st['arm'])), FLANGE)
-                r, t = log_err(inv(A @ Y) @ X @ bp.T_cam_board)
-                report['board_check'] = {'mm': round(1000 * float(np.linalg.norm(t)), 2),
-                                         'deg': round(math.degrees(float(np.linalg.norm(r))), 3),
-                                         'corners': bp.corners}
 
         # 3. table
         if depth is not None:

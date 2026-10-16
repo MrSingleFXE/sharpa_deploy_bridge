@@ -20,12 +20,13 @@
 | **L-mock / L-real** | 启动实验室部署系统 | ROS + ws_fanuc（真机再加 Sharpa SDK）+ 域号，**不激活 venv** |
 | **T-mock / T-real** | 本仓库里要读/写机器人的脚本 | 同上 + 工具 venv |
 | **C** | 相机、点云、选抓取、离线计算 | 只激活工具 venv |
+| **K** | 相机 ROS 驱动 + industrial_calibration 标定 | ROS + `~/bodex_sharpa_deploy/ws_calib`，**不激活 venv** |
 
 mock 用域号 198 且只在本机；真机域号 87。FoundationStereo 和 DexLearn 各有自己的 Python，命令里直接写了它们的路径。
 
 ---
 
-# 0. 第一次使用：安装（只需做一次，全部在 `~/bodex_sharpa_deploy` 下，不需要 sudo）
+# 0. 第一次使用：安装（只需做一次，全部在 `~/bodex_sharpa_deploy` 下；只有 0.4 标定工具需要 sudo）
 
 ### 0.1 更新代码
 
@@ -64,7 +65,21 @@ MinkowskiEngine 0.5.4、pytorch3d 0.7.5，CPU 版，自带 gcc 和 OpenBLAS）�
 预期最后：`OK torch 2.0.1+cpu | MinkowskiEngine 0.5.4 (CPU) | model class BaseModel` 和 `DONE`。
 编译失败会打印日志最后 30 行和日志路径，把它发给我。
 
-### 0.4 训练好的模型文件
+### 0.4 相机标定工具：ROS-Industrial industrial_calibration（约 10–20 分钟，需要 sudo）
+
+```bash
+cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
+bash install/install_calibration.sh
+```
+
+做了什么：apt 安装 RealSense ROS 2 驱动（`realsense2_camera`）、vcstool、rosdep；在**独立的** colcon 工作空间
+`~/bodex_sharpa_deploy/ws_calib`（不碰 `ws_fanuc`）编译 industrial_calibration 1.2.0（核心库 + 手眼标定图形界面）、
+industrial_calibration_ros2 1.2.0（ROS 2 采集节点 + RViz 面板）以及本仓库的 `ic_extrinsic_cli`（同一套算法的命令行版）。
+运行前先 `deactivate` 掉 venv（脚本会检查）。
+预期最后：打印 `industrial_calibration_ros`、`realsense2_camera` 的安装路径、`industrial_calibration_extrinsic_hand_eye_calibration_app`、
+`ic_extrinsic_cli` 和 `DONE`。
+
+### 0.5 训练好的模型文件
 
 模型（189 MB，不放在 GitHub）放在 `~/bodex_sharpa_deploy/models/dexlearn_sharpa_v3_s34_50k/`，内有 `config.yaml`、
 `step_050000.pth`、`MANIFEST.json`。检查：
@@ -77,7 +92,7 @@ cd ~/bodex_sharpa_deploy/models/dexlearn_sharpa_v3_s34_50k && sha256sum config.y
 这就是 V3 + 34 球 + kp12 + α1、8 卡 50k 步的模型（测试集全候选物理成功率 57.87%，似然 Top-10 75.88%）。
 这个文件夹不在公开仓库里，由我们单独拷贝到主机；目录不存在或校验不一致时先不要往下做。
 
-### 0.5 自检（不需要相机和机器人，约 2 分钟）
+### 0.6 自检（不需要相机和机器人，约 2 分钟）
 
 ```bash
 # 终端 C
@@ -126,67 +141,38 @@ python3 execute_grasp.py --grasp examples/master_chef_can_pose000_14_grasp.npy -
 
 ---
 
-# B. 相机标定（相机在 world 中的位置；只用右臂）
+# B. 相机标定：ROS-Industrial industrial_calibration + ChArUco（相机在 world 中的位置；只用右臂）
 
-**为什么**：相机看到的点要换算到机械臂的坐标系才能去抓。**原理**：把一个打印的码刚性固定在右臂末端，让右臂摆
-15–30 个姿态；每个姿态同时知道"法兰在 world 中的位置"（关节角正运动学）和"码在相机里的位置"（图像），
-解 `A_i·Y = X·B_i` 得到相机位置 X（Y 是码相对法兰的位置，自动求出，不用量）。只用彩色图。
+**为什么**：相机看到的点要换算到机械臂坐标系才能去抓。**怎么做**：ChArUco 板刚性固定在右臂末端，右臂摆 20–30 个姿态；
+industrial_calibration 的采集节点在每个姿态记录一张图 + TF 给出的"world → 右臂法兰 `right_ee_mount`"位姿；
+它的手眼标定（`static_camera: true`）求出 camera mount（= world）→ 相机 和 target mount（= 法兰）→ 板。
+服务器上用 industrial_calibration 1.2.0 的同一套优化跑合成数据：相机位姿误差 0.10 mm / 0.05°（从偏 5 cm / 10° 的初值也收敛到同一解）。
 
-### B.1 确认你的码（自己打印的码也可以）
-
-支持：我们的 ChArUco 板、**单个 ArUco / AprilTag 码**、**QR 二维码**。服务器上用模拟机器人 + 模拟相机（约 1 m）跑完整采集和求解，
-20 个样本时手部工作区的误差：
-
-| 标定物 | 结论 | 手部工作区误差 |
-|---|---|---|
-| ChArUco 板（A4） | GOOD | 0.2 mm |
-| AprilTag 36h11，10 cm / 15 cm | GOOD | 3.2 mm / 3.8 mm |
-| QR 二维码，12 cm / 18 cm | USABLE | **14 mm / 10 mm** |
-
-QR 码的角点定位有系统偏差，会让相机位置整体偏约 1 cm，而且求解的结论检查不出这种偏差，**不建议用 QR 码**。
-手头只有 QR 码的话，用下面这条生成一个 AprilTag（A4 能打 12–15 cm）：
+### B.1 打印 ChArUco 板
 
 ```bash
 # 终端 C
 source ~/bodex_sharpa_deploy/venv/bin/activate
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
-python3 calibration/make_board.py --out calib/board --apriltag 0.12      # 打印 calib/board/apriltag_print.pdf（100%）
+python3 calibration/make_board.py --out calib/board
 ```
 
-用卡尺量码的**黑色正方形外边长**（不含白边，单位米），把码拿到相机前 0.4–0.8 m：
+预期：`ChArUco 5 cols x 7 rows, square 30.0 mm, marker 22.0 mm, DICT_5X5_100 ...`。把 `calib/board/charuco_print.pdf`
+按 **100% 实际尺寸**打印，平整贴在硬板上；用卡尺量一个方格和一个码的边长（米），写回（同时更新 industrial_calibration 的
+目标配置 `calib/board/ic_target.yaml`）：
 
 ```bash
-# 终端 C
-source ~/bodex_sharpa_deploy/venv/bin/activate
-cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
-python3 calibration/identify_target.py --size-m 0.120          # 换成你量的边长
+python3 calibration/make_board.py --out calib/board --set-measured 0.0300 0.0220     # 换成实测值
 ```
 
-预期：`found: 1 marker(s) of DICT_APRILTAG_36h11, ids [..]`（或 `found: QR code`），并写出 `calib/board/board.json`。
-显示 `nothing detected` 时看 `calib/board/identify_input.png`：码要完整、平整、不反光。
-（若用我们的 ChArUco 板：`python3 calibration/make_board.py --out calib/board`，打印后 `--set-measured 方格边长 码边长`。）
+### B.2 固定板
 
-### B.2 检查相机和识别
+刚性固定（螺丝/夹具）在 J6 之后（转接件或手背），臂在起始姿态时板面朝向相机；不能装在手指上或 J5 及以前的连杆上。全程不能动。
 
-```bash
-# 终端 C（码拿在右手大致要去的位置）
-source ~/bodex_sharpa_deploy/venv/bin/activate
-cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
-python3 calibration/camera_check.py --board calib/board/board.json
-```
-
-预期：列出所有 RealSense（含 D405），自动选中 `D435I`；USB 版本 3.x；`board detected in 10/10 frames`；
-`reproj` < 0.5 px（QR 可到 1 px）；`position jitter` 几毫米以内。`calib/camera_check/camera_check.png` 上码中心画了坐标轴。
-
-### B.3 把码固定到右臂末端
-
-刚性固定（螺丝/夹具/扎紧的支架）在 J6 之后（转接件或手背），臂在起始姿态时码面朝向相机；不能装在手指上，不能装在 J5 及以前的连杆上。
-标定全程码不能动。码会伸出手外，下面的 `--clearance` 用 0.15。
-
-### B.4 采集（推荐方式 A：只读 + 示教器点动，脚本不发任何运动命令）
+### B.3 启动机器人（只读）和相机 ROS 驱动
 
 ```bash
-# 终端 L-real（只读启动：PC 只读状态，不控制机械臂）
+# 终端 L-real（只读：PC 只读状态、发布 TF，不控制机械臂）
 source /opt/ros/jazzy/setup.bash
 source ~/ws_fanuc/install/setup.bash
 export PYTHONPATH=/opt/sharpa-wave-sdk/python:$PYTHONPATH
@@ -196,46 +182,107 @@ unset ROS_AUTOMATIC_DISCOVERY_RANGE
 ros2 launch bimanual_manipulation bimanual_system.launch.py crx_mock:=false sharpa_backend:=sharpa_sdk read_only:=true rviz:=true
 ```
 
+D435I 的序列号（主机上同时有 D405，必须指定）：
+
 ```bash
-# 终端 T-real
+# 终端 C（相机驱动启动前运行；会列出所有 RealSense）
+source ~/bodex_sharpa_deploy/venv/bin/activate
+cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
+python3 -c "from calibration.camera import list_devices; print(*list_devices(), sep='\n')"
+```
+
+```bash
+# 终端 K1：相机驱动（彩色 1280x720 + 对齐到彩色的深度）
+source /opt/ros/jazzy/setup.bash
+export ROS_DOMAIN_ID=87
+unset ROS_AUTOMATIC_DISCOVERY_RANGE
+ros2 launch realsense2_camera rs_launch.py serial_no:="'<D435I 序列号>'" rgb_camera.color_profile:=1280,720,15 align_depth.enable:=true
+```
+
+预期：`/camera/camera/color/image_raw`、`/camera/camera/color/camera_info` 有数据（`ros2 topic hz /camera/camera/color/image_raw` ≈ 15）。
+若报 `rgb_camera.color_profile` 参数不认识，去掉这个参数（用默认分辨率也行，后面的内参直接从 camera_info 读）。
+检查彩色图无畸变：`ros2 topic echo --once /camera/camera/color/camera_info | grep -A5 "^d:"` 应全为 0（D435i 彩色流通常如此）。
+
+### B.4 采集（industrial_calibration_ros 的数据采集流程）
+
+```bash
+# 终端 K2
+source /opt/ros/jazzy/setup.bash
+source ~/bodex_sharpa_deploy/ws_calib/install/setup.bash
+export ROS_DOMAIN_ID=87
+unset ROS_AUTOMATIC_DISCOVERY_RANGE
+cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
+ros2 launch industrial_calibration_ros data_collection.launch.xml static_camera:=true \
+    camera_mount_frame:=world target_mount_frame:=right_ee_mount \
+    camera_frame:=camera_color_optical_frame target_frame:=charuco_board \
+    image_topic:=/camera/camera/color/image_raw config_file:=$PWD/calib/board/ic_target.yaml \
+    save_path:=$PWD/calib/ic_data
+```
+
+预期：RViz 打开，`/image_annotated` 里能看到板被识别（角点画出）。操作：示教器点动右臂（含绕不同方向转 15–35°、位置变化 ±10 cm，
+板占画面 1/5–1/2），**每停稳一次**，在 RViz 面板点采集，或在另一个终端 K3（环境同 K2）运行：
+
+```bash
+ros2 service call /trigger std_srvs/srv/Trigger
+```
+
+终端 K2 打印 `Observation added` 才算一个样本（板没识别到就不会加）。采 25–30 个后保存：
+
+```bash
+ros2 service call /save std_srvs/srv/Trigger
+```
+
+预期：返回 `success: True, message: '.../calib/ic_data/<日期时间>'`，该目录下有 `cal_data.yaml`、`images/`、`poses/`。
+
+### B.5 生成标定配置（内参 + 板 + 初值）
+
+```bash
+# 终端 T-real（相机驱动保持运行：从 camera_info 读内参）
 source /opt/ros/jazzy/setup.bash
 source ~/ws_fanuc/install/setup.bash
-export PYTHONPATH=/opt/sharpa-wave-sdk/python:$PYTHONPATH
-export LD_LIBRARY_PATH=/opt/sharpa-wave-sdk/lib:$LD_LIBRARY_PATH
 source ~/bodex_sharpa_deploy/venv/bin/activate
 export ROS_DOMAIN_ID=87
 unset ROS_AUTOMATIC_DISCOVERY_RANGE
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
-python3 calibration/collect_handeye.py --out calib/run1 --board calib/board/board.json --mode manual
+python3 calibration/ic_config.py --data calib/ic_data/<日期时间> --out calib/ic_config.yaml
 ```
 
-操作：示教器点动右臂（含绕不同方向的转动 15–35°，位置变化 ±10 cm），每停稳一次在终端 T-real 按 Enter；采 20–30 个后按 q。
-预期每次：`sample N: 4 corners (或 24), reproj 0.xpx, frame spread 0.xmm, board 0.7 m away`；码没识别到会提示该样本不用。
-先确认点动时 RViz 里的臂跟着动（只读模式下状态正常）。
-（方式 B 自动：可写 launch 下 `--mode auto --clearance 0.15`，先不加 `--execute` 看规划，再加；脚本以 5°/s 走 15 个姿态，每步 Enter。）
+预期：`board found in N/N images`；`initial camera guess in world` 在两臂之间、比基座高；`saved calib/ic_config.yaml`。
+（初值只是给 industrial_calibration 的起点；真正的求解在下一步。）
 
-### B.5 求解
+### B.6 求解（industrial_calibration）
+
+图形界面（官方）：
 
 ```bash
-# 终端 C
-source ~/bodex_sharpa_deploy/venv/bin/activate
+# 终端 K3
+source /opt/ros/jazzy/setup.bash
+source ~/bodex_sharpa_deploy/ws_calib/install/setup.bash
+ros2 run industrial_calibration industrial_calibration_extrinsic_hand_eye_calibration_app
+```
+
+在界面里加载配置 `calib/ic_config.yaml` 和数据 `calib/ic_data/<日期时间>/cal_data.yaml`，运行标定，"Save calibration..." 保存为
+`calib/ic_result.yaml`。或者用同一套算法的命令行版（终端 K3）：
+
+```bash
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
-python3 calibration/solve_handeye.py calib/run1 --out calib/camera_extrinsics.json
+ic_extrinsic_cli calib/ic_config.yaml calib/ic_data/<日期时间>/cal_data.yaml calib/ic_result.yaml
 ```
 
-预期：`verdict` 为 `GOOD`（平移 RMS ≤ 3 mm、留一法工作区偏移 ≤ 2 mm）或 `USABLE`；`camera_position_world_m` 在两臂之间、
-比基座高（例如 y≈−0.45、z≈0.8–1.0）；`camera_viewing_direction_world` 的 z 为负（朝下看）。`REDO` 就补采更多、转动更大的姿态。
+预期：`using N / N observations`、`Optimization converged`、残差（GUI 显示的像素误差，或 `Final cost per observation` 开方）
+通常 < 1 px；3D 重投影误差几毫米以内；没有大于 0.8 的相关系数（有则说明姿态变化不够，补采）。
 
-### B.6 验证（只读，不动机器人）
-
-终端 L-real 保持只读启动；终端 T-real（环境同 B.4）运行：
+### B.7 转成本仓库用的外参文件并验证
 
 ```bash
-python3 calibration/verify_extrinsics.py --extrinsics calib/camera_extrinsics.json --board calib/board/board.json
+# 终端 T-real（环境同 B.5）
+python3 calibration/ic_result.py calib/ic_result.yaml --config calib/ic_config.yaml
+python3 calibration/verify_extrinsics.py --camera ros --extrinsics calib/camera_extrinsics.json
 ```
 
-预期：`calib/verify/overlay.png` 上黄圈落在右臂各关节上（紫圈是手，手安装外参标好前可能整体偏几厘米）；
-`board_check` 几毫米 / 1° 以内；`table.table_z_m` 是桌面在 world 中的高度（记下来）。
+预期：`converged: true`；`camera_position_world_m` 在两臂之间、比基座高；`camera_viewing_direction_world` 的 z 为负；
+`calib/verify/overlay.png` 上黄圈落在右臂各关节上（紫圈是手，C 节之前可能整体偏几厘米）；`table.table_z_m` 是桌面高度（记下来）。
+标定完成后 **Ctrl+C 停掉相机驱动（终端 K1）**，否则后面 `run_scene.sh` 拍照时相机被占用。
 
 ---
 
@@ -245,7 +292,7 @@ python3 calibration/verify_extrinsics.py --extrinsics calib/camera_extrinsics.js
 的固定变换，现在实验室配置里是占位值（平移 0）。**原理**：相机标好后，深度能看到手的真实位置，关节角给出法兰位置；用 Sharpa
 手自己的 CAD 网格去贴合多个视角的深度点云，求出这个变换。仿真：从偏 13 mm / 40° 的初值恢复到 0.4 mm / 0.1°。
 
-### C.1 采集 5–8 个视角（只读 launch 同 B.4；拆掉标定码；手保持一个姿态，例如张开）
+### C.1 采集 5–8 个视角（只读 launch 同 B.3；相机驱动已停（K1）；拆掉标定板；手保持一个姿态，例如张开）
 
 ```bash
 # 终端 T-real
@@ -257,7 +304,7 @@ source ~/bodex_sharpa_deploy/venv/bin/activate
 export ROS_DOMAIN_ID=87
 unset ROS_AUTOMATIC_DISCOVERY_RANGE
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
-python3 calibration/collect_hand_views.py --out calib/hand_views --table-z <B.6 的 table_z_m>
+python3 calibration/collect_hand_views.py --out calib/hand_views --table-z <B.7 的 table_z_m>
 ```
 
 操作：示教器把右臂移到手完整入镜、离相机 0.5–0.9 m、离桌面和其他物体远一些的位置，每次换一个腕部朝向，停稳按 Enter。
@@ -377,7 +424,7 @@ python3 execute_grasp.py --grasp captures/scene01/grasps/grasps_world.npy --inde
 
 | 部分 | 结果 |
 |---|---|
-| 相机标定（mock 机器人 + 模拟相机完整流程，OpenCV 4.10 / 5.0） | 工作区误差：ChArUco 0.2 mm，AprilTag 3.2–3.8 mm，QR 10–14 mm（不建议） |
+| 相机标定：industrial_calibration 1.2.0 + ChArUco（合成数据，采集器同格式，25 张） | 相机 0.10 mm / 0.05°，手工作区 0.6 mm，残差 0.14 px；从偏 5 cm / 10° 的初值也收敛到同一解；OpenCV 4.10 打印的板被 4.6 识别且坐标系一致 |
 | FoundationStereo（官方 ViT-S，torch 2.7，无 xformers，离线） | 官方示例 960x540：2.0 s（A800），有效 90.7% |
 | 点云（合成场景，无标定 / 有标定） | 红外→彩色配准中位误差 0.28 mm；物体高度 0.121 m（真值 0.12） |
 | 真实双目图全链路（官方示例里的杯子，无标定） | 只选中杯子（12 cm）；200 个抓取 143 个通过 |
