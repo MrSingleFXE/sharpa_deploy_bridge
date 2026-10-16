@@ -21,8 +21,8 @@ NEW_API = hasattr(cv2.aruco, 'CharucoDetector')
 class BoardSpec:
     squares_x: int = 5            # columns  (industrial_calibration: cols)
     squares_y: int = 7            # rows     (industrial_calibration: rows; keep odd)
-    square_m: float = 0.030       # MEASURED printed square side, metres   (chessboard_dim)
-    marker_m: float = 0.022       # MEASURED printed marker side, metres   (aruco_marker_dim)
+    square_m: float = 0.035       # MEASURED printed square side, metres   (chessboard_dim)
+    marker_m: float = 0.026       # MEASURED printed marker side, metres   (aruco_marker_dim)
     dictionary: str = 'DICT_5X5_100'
 
     def save(self, path):

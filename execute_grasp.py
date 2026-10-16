@@ -48,7 +48,8 @@ def parse_args(argv=None):
     p.add_argument('--anchor-offset', type=float, nargs=3, default=[0, 0, 0.15], metavar=('DX', 'DY', 'DZ'),
                    help='added to the anchor (default: 15 cm up, so the in-air test stays high)')
     p.add_argument('--yaw-deg', type=float, nargs='*', help='scene yaw(s) to try (default 0..345 step 15)')
-    p.add_argument('--table-z', type=float, default=0.0, help='table top height in world (m)')
+    p.add_argument('--table-z', type=float, help='table top height in world (m); default: table_z_m of '
+                                                 'calib/verify/verify.json (README B.7) if it exists, else 0')
     p.add_argument('--clearance', type=float, default=0.10, help='min height of any moving link above table (m)')
     p.add_argument('--approach-lift', type=float, default=0.08)
     p.add_argument('--arm-speed-deg', type=float, default=5.0)
@@ -60,7 +61,8 @@ def parse_args(argv=None):
     p.add_argument('--hold', type=float, default=3.0, help='seconds to keep streaming the final hand target')
     p.add_argument('--urdf', help='use this URDF file instead of /bimanual/robot_description')
     p.add_argument('--hand-mount', help='calibrated hand mount (.json/.yaml, hand_mounts.yaml format); replaces the '
-                                        'arm-flange -> hand-flange transform in the PLANNING model only')
+                                        'arm-flange -> hand-flange transform in the PLANNING model only; default: '
+                                        'calib/hand_mount.json (README C) if it exists; "none" = lab placeholder')
     p.add_argument('--obstacles', help='object points in world (.npy, e.g. object_world.npy): the hand must keep '
                                        '--obstacle-clearance from them until it reaches pregrasp')
     p.add_argument('--obstacle-clearance', type=float, default=0.02)
@@ -69,7 +71,19 @@ def parse_args(argv=None):
     p.add_argument('--yes', action='store_true', help='do not pause before each stage')
     p.add_argument('--arm-track-tol-deg', type=float, default=6.0)
     p.add_argument('--hand-track-tol-deg', type=float, default=20.0)
-    return p.parse_args(argv)
+    a = p.parse_args(argv)
+    calib = Path(__file__).resolve().parent / 'calib'
+    if a.table_z is None:
+        f = calib / 'verify' / 'verify.json'
+        tz = json.loads(f.read_text()).get('table', {}).get('table_z_m') if f.exists() else None
+        a.table_z = float(tz) if tz is not None else 0.0
+        print(f'table z = {a.table_z} m (from {f})' if tz is not None else 'table z = 0 m (no calibration result; assumption)')
+    if a.hand_mount is None and (calib / 'hand_mount.json').exists():
+        a.hand_mount = str(calib / 'hand_mount.json')
+        print(f'hand mount = {a.hand_mount} (default; --hand-mount none to use the lab placeholder)')
+    elif a.hand_mount == 'none':
+        a.hand_mount = None
+    return a
 
 
 def limits_from(args):

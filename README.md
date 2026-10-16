@@ -164,7 +164,7 @@ python3 calibration/make_board.py --out calib/board
 目标配置 `calib/board/ic_target.yaml`）：
 
 ```bash
-python3 calibration/make_board.py --out calib/board --set-measured 0.0300 0.0220     # 换成实测值
+python3 calibration/make_board.py --out calib/board --set-measured 0.0350 0.0260     # 本实验室打印件的实测值（重新打印要重量）
 ```
 
 ### B.2 固定板（可以先把右手拆下）
@@ -189,7 +189,7 @@ ros2 launch bimanual_manipulation single_arm_hand.launch.py prefix:=right_ crx_m
 
 预期：RViz 里只有右臂（和一只 mock 手），示教器点动时 RViz 里的右臂跟着动。不跟着动就先别往下做（只读状态流有问题）。
 
-找 D415 的序列号（相机驱动启动之前）：
+本实验室 D415 的序列号是 **347322060270**（下面已填好）。换了相机时，先在相机驱动启动之前查一下：
 
 ```bash
 # 终端 C
@@ -198,14 +198,14 @@ cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
 python3 -c "from calibration.camera import list_devices; print(*list_devices(), sep='\n')"
 ```
 
-预期两行：`('RealSense D405', ...)` 和 `('RealSense D415', '<序列号>', ...)`。下面的 `<序列号>` 换成 D415 那一行的第二项（只写数字）。
+预期两行：`('RealSense D405', ...)` 和 `('RealSense D415', '347322060270', ...)`。不同的话，把下面命令里的序列号换成 D415 那一行的第二项。
 
 ```bash
 # 终端 K1：相机驱动（彩色 1280x720 + 对齐到彩色的深度）
 source /opt/ros/jazzy/setup.bash
 export ROS_DOMAIN_ID=87
 unset ROS_AUTOMATIC_DISCOVERY_RANGE
-ros2 launch realsense2_camera rs_launch.py serial_no:="'<序列号>'" rgb_camera.color_profile:=1280,720,15 align_depth.enable:=true
+ros2 launch realsense2_camera rs_launch.py serial_no:="'347322060270'" rgb_camera.color_profile:=1280,720,15 align_depth.enable:=true
 ```
 
 预期：日志里出现 D415 的序列号并开始出流，没有 `NOT found`。另开终端检查（环境同 K1）：
@@ -377,6 +377,10 @@ bash run_scene.sh scene01
 | ⑤ 过滤排序 | 去掉超关节限位、手碰桌、预抓时穿进物体的 → 按似然排序取前 10 | `passed` 通常 100–180 / 200；`grasps/selected_views.png`：灰 = 物体，红 = 手，应包住物体且不在桌面以下 |
 | ⑥ 转到 world | 需要 `calib/camera_extrinsics.json` | 打印前 3 个抓取的 world 坐标和下一步的执行命令 |
 
+**怎么选物体**：桌面以上 0.5–30 cm 的点按 1 cm 连通成团，每团打印一行（点数、水平尺寸、像素位置、是否合格）。
+不合格的团：碰到图像边缘的（机械臂、手都是从画面边上伸进来的）、水平尺寸 > 0.30 m 的（`--max-size` 可改）。
+在合格的里面取最大的一团。所以拍照时物体要完整在画面内，不要贴着边。
+
 选错了物体（例如选到了别的东西）：在 `captures/scene01/color.png` 上找物体上一个像素坐标 (u, v)，然后
 `bash run_scene.sh scene01 --skip-capture --pixel u v`。想对比 RealSense 自带深度：`--skip-capture --depth raw`。
 
@@ -386,7 +390,7 @@ bash run_scene.sh scene01
 
 # E. 执行抓取（需要 B、C；先 mock 再真机；第一次只做到 pregrasp）
 
-⑥ 打印的命令形如下面这样（`table-z` 取 `object_fs/object.json` 里的 `table_z_world_m`）。先在 mock 里看规划和动作：
+⑥ 打印的命令形如下面这样。`--table-z` 和 `--hand-mount` 不写时，自动用 `calib/verify/verify.json` 的桌高（本实验室 −0.157 m）和 `calib/hand_mount.json`，启动时会打印用的是哪个；写了以写的为准。先在 mock 里看规划和动作：
 
 ```bash
 # 终端 L-mock：同 A 节
@@ -398,7 +402,7 @@ export ROS_DOMAIN_ID=198
 export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
 python3 execute_grasp.py --grasp captures/scene01/grasps/grasps_world.npy --index 0 --wrist-frame world \
-    --table-z <table_z_world_m> --clearance 0.005 \
+    --table-z -0.158 --clearance 0.005 \
     --obstacles captures/scene01/object_fs/object_world.npy --hand-mount calib/hand_mount.json --stop-after pregrasp
 ```
 
@@ -427,7 +431,7 @@ export ROS_DOMAIN_ID=87
 unset ROS_AUTOMATIC_DISCOVERY_RANGE
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
 python3 execute_grasp.py --grasp captures/scene01/grasps/grasps_world.npy --index 0 --wrist-frame world \
-    --table-z <table_z_world_m> --clearance 0.005 \
+    --table-z -0.158 --clearance 0.005 \
     --obstacles captures/scene01/object_fs/object_world.npy --hand-mount calib/hand_mount.json --stop-after pregrasp --execute
 ```
 
@@ -442,8 +446,8 @@ python3 execute_grasp.py --grasp captures/scene01/grasps/grasps_world.npy --inde
 | `--arm-speed-deg / --arm-accel-deg` | 5 / 10 | 每个臂关节 °/s、°/s²；> 20 °/s 拒绝 |
 | `--hand-speed-deg / --hand-accel-deg` | 10 / 20 | 每个手关节；> 30 °/s 拒绝 |
 | `--wrist-frame` | scene | scene：把候选放到当前手位置上方的空中（A 节）；world：抓真实物体（E 节） |
-| `--table-z` / `--clearance` | 0 / 0.10 m | 肘部以外及手的连杆原点必须高于桌面这么多（第 1 段只要求不低于起点） |
-| `--hand-mount` | 无 | C 节结果；只替换规划模型里的法兰→手变换 |
+| `--table-z` / `--clearance` | `calib/verify/verify.json` 的桌高（无则 0）/ 0.10 m | 肘部以外及手的连杆原点必须高于桌面这么多（第 1 段只要求不低于起点） |
+| `--hand-mount` | `calib/hand_mount.json`（无则实验室占位值；`none` 强制占位值） | C 节结果；只替换规划模型里的法兰→手变换 |
 | `--obstacles` / `--obstacle-clearance` | 无 / 0.02 m | 物体点云；到 pregrasp 之前手与物体保持距离 |
 | `--stop-after` / `--release` | squeeze / 否 | 只做到某一步；抓完张手抬起 |
 

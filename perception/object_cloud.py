@@ -5,8 +5,11 @@
   -> dominant table plane (RANSAC in the camera frame)
   -> table frame: z = table normal (up), x = camera viewing direction projected on the table,
      origin = the object's centroid projected onto the table          (needs no calibration)
-  -> points 5 mm .. --max-height above the table -> 1 cm voxel clusters -> object cluster
-     (the one containing --pixel, else the largest one inside --roi / the image)
+  -> points 5 mm .. --max-height above the table -> 1 cm voxel clusters -> object cluster:
+     --pixel: the cluster at that pixel (no other filter);
+     otherwise the largest cluster inside --roi / the image that is a plausible tabletop object:
+       not touching the image border (the robot arms enter the picture from its edges),
+       horizontal size <= --max-size; all candidates are printed (pick another one with --pixel)
 
 With --extrinsics (calibration done) the world frame is added: T_world_table = T_world_cam @ T_cam_table,
 and the table normal is checked against world z.
@@ -93,7 +96,7 @@ def table_frame(n, c, view_dir=np.array([0.0, 0.0, 1.0])):
 
 
 def extract(depth, K, rng, X=None, max_height=0.30, roi=None, pixel=None, workspace=None, min_points=200,
-            max_range=2.0):
+            max_range=2.0, max_size=0.30, border_px=8):
     """Returns dict with object points (table frame), T_cam_table, pixel indices, table stats."""
     P, (v, u) = deproject(depth, K)
     keep = P[:, 2] < max_range
@@ -123,8 +126,29 @@ def extract(depth, K, rng, X=None, max_height=0.30, roi=None, pixel=None, worksp
             raise RuntimeError(f'no above-table point within 15 px of pixel {pixel}')
         target = lab[int(np.argmin(d2))]
     else:
-        ids, cnt = np.unique(lab, return_counts=True)
-        target = ids[np.argmax(cnt)]
+        h, w = depth.shape[:2]
+        cands = []
+        for i in np.unique(lab):
+            k = lab == i
+            if k.sum() < min_points:
+                continue
+            P_i, u_i, v_i = Qc[k], uc[k], vc[k]
+            size = float(np.linalg.norm(P_i[:, :2].max(0) - P_i[:, :2].min(0)))
+            border = bool((u_i < border_px).any() or (v_i < border_px).any() or (u_i >= w - border_px).any()
+                          or (v_i >= h - border_px).any())
+            why = 'touches image border (robot/off-table)' if border else (
+                f'too large ({size:.2f} m > --max-size)' if size > max_size else 'ok')
+            cands.append((int(k.sum()), i, why, size, int(np.median(u_i)), int(np.median(v_i))))
+        cands.sort(reverse=True)
+        print('above-table clusters (largest first):')
+        for n_, i, why, size, mu, mv in cands:
+            print(f'  {n_:7d} pts  size {size:.2f} m  pixel ({mu}, {mv})  {why}')
+        ok = [c for c in cands if c[2] == 'ok']
+        if not ok:
+            raise RuntimeError('no plausible object cluster (all touch the image border or are too large); '
+                               'move the arms out of the view or give --pixel U V on the object')
+        target = ok[0][1]
+        print(f'selected: pixel ({ok[0][4]}, {ok[0][5]}), {ok[0][0]} pts (use --pixel U V to pick another)')
     m = lab == target
     if m.sum() < min_points:
         raise RuntimeError(f'selected cluster has only {int(m.sum())} points')
@@ -172,6 +196,7 @@ def main(argv=None):
     p.add_argument('--depth', choices=['fs', 'raw'], default='fs')
     p.add_argument('--extrinsics', help='calib/camera_extrinsics.json (optional; adds the world frame)')
     p.add_argument('--max-height', type=float, default=0.30)
+    p.add_argument('--max-size', type=float, default=0.30, help='largest horizontal extent of an object cluster (m)')
     p.add_argument('--roi', type=int, nargs=4, metavar=('X0', 'Y0', 'X1', 'Y1'), help='pixel box with the object')
     p.add_argument('--pixel', type=int, nargs=2, metavar=('U', 'V'), help='a color-image pixel on the object')
     p.add_argument('--workspace', type=float, nargs=4, metavar=('XMIN', 'XMAX', 'YMIN', 'YMAX'),
@@ -188,7 +213,7 @@ def main(argv=None):
         if np.abs(K - np.array(ext['intrinsics']['K'])).max() > 1.0:
             print('WARNING: capture intrinsics differ from the calibration (different resolution?)')
     depth = np.load(cap / ('depth_fs_color.npy' if a.depth == 'fs' else 'depth_raw_color.npy'))
-    r = extract(depth, K, np.random.default_rng(0), X, a.max_height, a.roi, a.pixel, a.workspace)
+    r = extract(depth, K, np.random.default_rng(0), X, a.max_height, a.roi, a.pixel, a.workspace, max_size=a.max_size)
     obj = r['object_table']
     out = cap / f'object_{a.depth}'
     out.mkdir(exist_ok=True)
