@@ -5,10 +5,15 @@ and exposes K (3x3), dist (5,), size (w, h).
 """
 
 import json
+import os
 import time
 from pathlib import Path
 
 import numpy as np
+
+
+# The camera used for this setup (the host also has a D405 attached, which must not be picked).
+DEFAULT_MODEL = os.environ.get('SHARPA_CAMERA_MODEL', 'D415')
 
 
 class Intrinsics:
@@ -33,8 +38,9 @@ def list_devices():
     return out
 
 
-def select_device(serial=None, model='D435I'):
+def select_device(serial=None, model=None):
     """Pick the camera by serial, else by model name; refuse when ambiguous (e.g. a D405 is also plugged in)."""
+    model = model or DEFAULT_MODEL
     devs = list_devices()
     if not devs:
         raise RuntimeError('no RealSense found (USB cable / USB3 port / udev rules?)')
@@ -51,7 +57,7 @@ def select_device(serial=None, model='D435I'):
 class RealSenseCamera:
     """Direct SDK access. Do not run at the same time as a realsense2_camera ROS node."""
 
-    def __init__(self, width=1280, height=720, fps=30, serial=None, depth=True, model='D435I'):
+    def __init__(self, width=1280, height=720, fps=30, serial=None, depth=True, model=None):
         import pyrealsense2 as rs
         self.rs = rs
         serial = select_device(serial, model)

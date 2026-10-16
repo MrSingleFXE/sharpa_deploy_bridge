@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture one RGB-D + IR-stereo set from the D435i (pyrealsense2, no ROS, robot not involved).
+"""Capture one RGB-D + IR-stereo set from the RealSense D415 (pyrealsense2, no ROS, robot not involved).
 
 Writes <out>/:
   color.png              color image (BGR)
@@ -37,10 +37,10 @@ def T_of(ext):
     return T.tolist()
 
 
-class D435Rig:
-    """Open the D435(i) once (color + depth + both IR streams); grab() writes one capture folder."""
+class RealSenseRig:
+    """Open the RealSense (D415; any D4xx with an IR pair) once: color + depth + both IR streams; grab() writes a capture folder."""
 
-    def __init__(self, serial=None, model='D435I', width=1280, height=720, fps=15, emitter='on', warmup=45):
+    def __init__(self, serial=None, model=None, width=1280, height=720, fps=15, emitter='on', warmup=45):
         import pyrealsense2 as rs
         self.rs = rs
         self.serial = select_device(serial, model)
@@ -100,7 +100,7 @@ class D435Rig:
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--out', required=True, help='capture folder, e.g. captures/scene01')
-    p.add_argument('--model', default='D435I')
+    p.add_argument('--model', help='RealSense model when --serial is not given (default D415, env SHARPA_CAMERA_MODEL)')
     p.add_argument('--serial')
     p.add_argument('--width', type=int, default=1280)
     p.add_argument('--height', type=int, default=720)
@@ -108,7 +108,7 @@ def main(argv=None):
     p.add_argument('--emitter', choices=['on', 'off'], default='on')
     p.add_argument('--warmup', type=int, default=45, help='frames to skip for auto-exposure')
     a = p.parse_args(argv)
-    rig = D435Rig(a.serial, a.model, a.width, a.height, a.fps, a.emitter, a.warmup)
+    rig = RealSenseRig(a.serial, a.model, a.width, a.height, a.fps, a.emitter, a.warmup)
     try:
         valid = rig.grab(a.out)
         print(f'saved {a.out}: {rig.meta["device"]["name"]} {rig.serial}, baseline {rig.baseline * 1000:.1f} mm, '

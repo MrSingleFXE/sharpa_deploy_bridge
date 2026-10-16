@@ -22,6 +22,11 @@ import json
 import os
 import sys
 import time
+import warnings
+
+# Known, harmless messages from FoundationStereo's own code (xformers is intentionally not installed; old autocast API).
+warnings.filterwarnings('ignore', message='xFormers is')
+warnings.filterwarnings('ignore', category=FutureWarning, message='.*autocast.*')
 from pathlib import Path
 
 import numpy as np

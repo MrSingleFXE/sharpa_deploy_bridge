@@ -1,10 +1,10 @@
 # sharpa_deploy_bridge：用训练好的 DexLearn（Sharpa 右手）在真机上抓真实物体
 
-右臂 FANUC CRX + 右手 Sharpa Wave + 一个固定的 RealSense D435i。本仓库与实验室部署代码 `~/ws_fanuc` **完全解耦**：
+右臂 FANUC CRX + 右手 Sharpa Wave + 一个固定的 RealSense D415。本仓库与实验室部署代码 `~/ws_fanuc` **完全解耦**：
 不改、不编译部署代码，只通过运行中的 `bimanual_manipulation` launch 的话题通信。
 
 ```
-拍照（D435i） → FoundationStereo 深度 → 物体点云 → DexLearn 生成抓取 → 过滤排序 → 转到机器人坐标 → 慢速执行
+拍照（D415） → FoundationStereo 深度 → 物体点云 → DexLearn 生成抓取 → 过滤排序 → 转到机器人坐标 → 慢速执行
                 └──────────── 不需要标定，也不动机器人，可以随时单独看结果 ────────────┘   需要标定     需要机器人
 ```
 
@@ -90,7 +90,9 @@ cd ~/bodex_sharpa_deploy/models/dexlearn_sharpa_v3_s34_50k && sha256sum config.y
 
 预期：`45ff30f4…7ea7  config.yaml` 和 `0c5e8ca8…fd9e  step_050000.pth`（与 MANIFEST.json 一致）。
 这就是 V3 + 34 球 + kp12 + α1、8 卡 50k 步的模型（测试集全候选物理成功率 57.87%，似然 Top-10 75.88%）。
-这个文件夹不在公开仓库里，由我们单独拷贝到主机；目录不存在或校验不一致时先不要往下做。
+这个文件夹不在公开仓库里（189 MB），需要单独拷到主机；目录不存在或校验不一致时先不要往下做。
+从能同时访问主机和这份模型的电脑上拷贝（例如 `rsync -a <模型所在目录>/dexlearn_sharpa_v3_s34_50k <用户>@<主机>:~/bodex_sharpa_deploy/models/`），
+或用 U 盘复制到 `~/bodex_sharpa_deploy/models/` 下。
 
 ### 0.6 自检（不需要相机和机器人，约 2 分钟）
 
@@ -182,7 +184,7 @@ unset ROS_AUTOMATIC_DISCOVERY_RANGE
 ros2 launch bimanual_manipulation bimanual_system.launch.py crx_mock:=false sharpa_backend:=sharpa_sdk read_only:=true rviz:=true
 ```
 
-D435I 的序列号（主机上同时有 D405，必须指定）：
+D415 的序列号（主机上同时有 D405，必须指定）：
 
 ```bash
 # 终端 C（相机驱动启动前运行；会列出所有 RealSense）
@@ -196,12 +198,12 @@ python3 -c "from calibration.camera import list_devices; print(*list_devices(), 
 source /opt/ros/jazzy/setup.bash
 export ROS_DOMAIN_ID=87
 unset ROS_AUTOMATIC_DISCOVERY_RANGE
-ros2 launch realsense2_camera rs_launch.py serial_no:="'<D435I 序列号>'" rgb_camera.color_profile:=1280,720,15 align_depth.enable:=true
+ros2 launch realsense2_camera rs_launch.py serial_no:="'<D415 序列号>'" rgb_camera.color_profile:=1280,720,15 align_depth.enable:=true
 ```
 
 预期：`/camera/camera/color/image_raw`、`/camera/camera/color/camera_info` 有数据（`ros2 topic hz /camera/camera/color/image_raw` ≈ 15）。
 若报 `rgb_camera.color_profile` 参数不认识，去掉这个参数（用默认分辨率也行，后面的内参直接从 camera_info 读）。
-检查彩色图无畸变：`ros2 topic echo --once /camera/camera/color/camera_info | grep -A5 "^d:"` 应全为 0（D435i 彩色流通常如此）。
+检查彩色图无畸变：`ros2 topic echo --once /camera/camera/color/camera_info | grep -A5 "^d:"` 应全为 0（RealSense 彩色流通常如此；若不为 0，`ic_config.py` 会提示）。
 
 ### B.4 采集（industrial_calibration_ros 的数据采集流程）
 
@@ -327,6 +329,10 @@ python3 calibration/hand_mount_icp.py calib/hand_views/view_* --extrinsics calib
 
 # D. 面对真实物体：点云 → DexLearn → 抓取（不需要标定，不动机器人）
 
+相机是 **RealSense D415**。主机上还接着一个 D405，脚本默认只用型号含 `D415` 的设备；同型号不止一台或找不到时会报错并列出
+所有设备的序列号，这时加 `--serial <序列号>`（或 `export SHARPA_CAMERA_MODEL=<型号>` 换相机）。相机驱动（B.3 的终端 K1）
+运行时相机被占用，先 Ctrl+C 停掉它。
+
 把一个物体放在桌上右手够得到、相机看得清的位置（机械臂不要挡住），然后一条命令跑完 ①–⑤（标定做完后自动加 ⑥）：
 
 ```bash
@@ -338,7 +344,7 @@ bash run_scene.sh scene01
 
 | 步骤 | 做什么 | 预期 / 去看 |
 |---|---|---|
-| ① 拍照 | D435I 拍彩色、红外左右图、RealSense 深度 | `saved captures/scene01: Intel RealSense D435I ..., baseline 50.x mm` |
+| ① 拍照 | D415 拍彩色、红外左右图、RealSense 深度 | `saved captures/scene01: Intel RealSense D415 ..., baseline 55.x mm` |
 | ② FoundationStereo | 用红外左右图算深度 | 约 1–3 s；`captures/scene01/fs_vis.png`：中间（FoundationStereo）应比右边（RealSense）更完整、边缘更干净 |
 | ③ 物体点云 | 找桌面 → 取桌面以上的物体 → 桌面坐标系（z 向上） | `object_fs/overlay.png` 只有物体是红色；`height_above_table_m` ≈ 物体实际高度；`object_views.png` 三视图像该物体；`scene.ply` 可用 MeshLab 打开 |
 | ④ DexLearn | 物体移到训练场景中心、取 1024 点 → 200 个抓取（含三个姿态和似然） | 约 1–2 s（CPU）；`saved .../grasps_table.npy` |
@@ -436,6 +442,6 @@ python3 execute_grasp.py --grasp captures/scene01/grasps/grasps_world.npy --inde
 
 # 已知限制
 
-- DexLearn 训练用的是模拟单视角点云（模拟 Azure Kinect，约 0.74 m）；真实 D435i 的视角和噪声不同，成功率要实测。
+- DexLearn 训练用的是模拟单视角点云（模拟 Azure Kinect，约 0.74 m）；真实 D415 的视角和噪声不同，成功率要实测。
 - 执行时手从 pregrasp 正上方 8 cm 竖直下降；很高的物体做侧面抓取时可能需要别的接近方向。
 - 碰撞检查是近似的（连杆原点 / 网格采样点），臂与环境只检查了与左臂的距离。

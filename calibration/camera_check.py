@@ -22,7 +22,7 @@ def main():
     p.add_argument('--camera', choices=['realsense', 'ros'], default='realsense')
     p.add_argument('--color-topic', default='/camera/camera/color/image_raw')
     p.add_argument('--info-topic', default='/camera/camera/color/camera_info')
-    p.add_argument('--model', default='D435I', help='RealSense model to use when --serial is not given')
+    p.add_argument('--model', help='RealSense model when --serial is not given (default D415, env SHARPA_CAMERA_MODEL)')
     p.add_argument('--serial')
     p.add_argument('--frames', type=int, default=10)
     p.add_argument('--out', default='calib/camera_check')

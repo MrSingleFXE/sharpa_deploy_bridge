@@ -73,7 +73,7 @@ def main(argv=None):
     p.add_argument('--color-topic', default='/camera/camera/color/image_raw')
     p.add_argument('--info-topic', default='/camera/camera/color/camera_info')
     p.add_argument('--depth-topic', default='/camera/camera/aligned_depth_to_color/image_raw')
-    p.add_argument('--model', default='D435I', help='RealSense model to use when --serial is not given')
+    p.add_argument('--model', help='RealSense model when --serial is not given (default D415, env SHARPA_CAMERA_MODEL)')
     p.add_argument('--serial')
     p.add_argument('--table-roi', type=int, nargs=4, metavar=('X0', 'Y0', 'X1', 'Y1'),
                    help='pixel box containing mostly table (default: whole image)')

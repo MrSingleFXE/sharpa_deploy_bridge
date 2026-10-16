@@ -19,13 +19,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bridge.urdf_kin import URDFModel  # noqa: E402
 from calibration.robot_io import ARM, FLANGE, Abort, RobotIO, ask  # noqa: E402
-from perception.capture import D435Rig  # noqa: E402
+from perception.capture import RealSenseRig  # noqa: E402
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--out', required=True, help='e.g. calib/hand_views')
-    p.add_argument('--model', default='D435I')
+    p.add_argument('--model', help='RealSense model when --serial is not given (default D415, env SHARPA_CAMERA_MODEL)')
     p.add_argument('--serial')
     p.add_argument('--table-z', type=float, help='world z of the table (points below are ignored by the fit)')
     p.add_argument('--urdf')
@@ -37,7 +37,7 @@ def main(argv=None):
     try:
         io.wait_ready(need_hand=True)
         model = URDFModel(io.st['urdf'])
-        rig = D435Rig(a.serial, a.model)
+        rig = RealSenseRig(a.serial, a.model)
         n = len(list(out.glob('view_*')))
         print('READ-ONLY: move the arm with the pendant, let it stop, then Enter = capture, q = finish.')
         while True:

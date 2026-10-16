@@ -28,7 +28,7 @@ FS_PY=$BASE/fs_venv/bin/python
 step() { printf '\n======== %s\n' "$*"; }
 
 if [ $SKIP = 0 ]; then
-  step "1/6 capture -> $CAP  (D435I: color, IR pair, RealSense depth)"
+  step "1/6 capture -> $CAP  (D415: color, IR pair, RealSense depth)"
   $VENV_PY perception/capture.py --out "$CAP"
 fi
 
