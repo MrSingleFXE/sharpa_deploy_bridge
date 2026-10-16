@@ -94,11 +94,11 @@ def override_hand_mount(urdf_xml, xyz, rpy, joint='right_arm_to_hand'):
 @dataclass
 class Limits:
     rate_hz: float = 100.0
-    arm_vel: float = math.radians(5)      # rad/s, per joint
-    arm_acc: float = math.radians(10)
-    hand_vel: float = math.radians(10)
-    hand_acc: float = math.radians(20)
-    min_duration: float = 3.0
+    arm_vel: float = math.radians(10)     # rad/s, per joint
+    arm_acc: float = math.radians(20)
+    hand_vel: float = math.radians(20)
+    hand_acc: float = math.radians(40)
+    min_duration: float = 1.5
     table_z: float = 0.0                  # world z of the table top
     clearance: float = 0.10               # every checked link origin must stay this far above the table
     approach_lift: float = 0.08           # pre-approach point is this far above the pregrasp wrist
@@ -281,13 +281,16 @@ class Planner:
                 raise PlanError(f'{seg.name}: hand joint outside URDF limit {bad}')
             c = self.clearance(a, h)
             worst = min(worst, c)
-            if self.obstacles is not None and seg.name[:2] in ('1_', '2_'):
+            # Object clearance: full while travelling to the approach point; while descending (hand still in its
+            # start shape) the hand must not touch the object (5 mm); from the pregrasp shape on, contact is intended.
+            obst = {'1_': self.obstacle_clearance, '2_': min(self.obstacle_clearance, 0.005)}.get(seg.name[:2])
+            if self.obstacles is not None and obst is not None:
                 poses = self.moving_poses(a, h)
                 H = np.array([poses[l][:3, 3] for l in self.hand_links])
                 d = np.sqrt(((H[:, None] - self.obstacles[None]) ** 2).sum(-1)).min()
-                if d < self.obstacle_clearance:
+                if d < obst:
                     raise PlanError(f'{seg.name}: hand comes {d:.3f} m from the object before pregrasp '
-                                    f'(need >= {self.obstacle_clearance:.3f})')
+                                    f'(need >= {obst:.3f})')
             if c[0] < floor:
                 raise PlanError(f'{seg.name}: link {c[1]} only {c[0]:.3f} m above table '
                                 f'(need >= {floor:.3f})')
@@ -358,9 +361,12 @@ class Planner:
     def _plan_yaw(self, grasp, arm_now, hand_now, anchor, yaw, stages, release, sol, lift_place=None, home=None):
         S, W, approach = self._stage_poses(grasp, anchor, yaw)
         H = {s: np.asarray(grasp.hand[s], float) for s in STAGES}
-        segs = [self.joint_segment('1_arm_to_approach', arm_now, sol, hand_now, hand_now),
-                self.joint_segment('2_hand_to_pregrasp', sol, sol, hand_now, H['pregrasp'])]
-        segs.append(self.cartesian_segment('3_descend_to_pregrasp', sol, W['pregrasp'], H['pregrasp'], H['pregrasp']))
+        # Approach above the object and descend with the hand still in its start shape; only at the bottom does
+        # the hand change to the pregrasp shape (then grasp, squeeze).
+        segs = [self.joint_segment('1_arm_to_approach', arm_now, sol, hand_now, hand_now)]
+        segs.append(self.cartesian_segment('2_descend', sol, W['pregrasp'], hand_now, hand_now))
+        segs.append(self.joint_segment('3_hand_to_pregrasp', segs[-1].arm[-1], segs[-1].arm[-1], hand_now,
+                                       H['pregrasp']))
         prev = 'pregrasp'
         for k, stage in enumerate(stages[1:], start=4):
             segs.append(self.cartesian_segment(f'{k}_{prev}_to_{stage}', segs[-1].arm[-1], W[stage], H[prev], H[stage]))

@@ -58,11 +58,11 @@ def parse_args(argv=None):
                                                  'calib/verify/verify.json (README B.7) if it exists, else 0')
     p.add_argument('--clearance', type=float, default=0.10, help='min height of any moving link above table (m)')
     p.add_argument('--approach-lift', type=float, default=0.08)
-    p.add_argument('--arm-speed-deg', type=float, default=5.0)
-    p.add_argument('--arm-accel-deg', type=float, default=10.0)
-    p.add_argument('--hand-speed-deg', type=float, default=10.0)
-    p.add_argument('--hand-accel-deg', type=float, default=20.0)
-    p.add_argument('--min-duration', type=float, default=3.0)
+    p.add_argument('--arm-speed-deg', type=float, default=10.0, help='per joint, deg/s (cap 20)')
+    p.add_argument('--arm-accel-deg', type=float, default=20.0)
+    p.add_argument('--hand-speed-deg', type=float, default=20.0, help='per joint, deg/s (cap 30)')
+    p.add_argument('--hand-accel-deg', type=float, default=40.0)
+    p.add_argument('--min-duration', type=float, default=1.5, help='shortest segment, s')
     p.add_argument('--rate', type=float, default=100.0, help='must match the launch input_rate_hz')
     p.add_argument('--hold', type=float, default=3.0, help='seconds to keep streaming the final hand target')
     p.add_argument('--urdf', help='use this URDF file instead of /bimanual/robot_description')
@@ -74,10 +74,18 @@ def parse_args(argv=None):
     p.add_argument('--obstacle-clearance', type=float, default=0.02)
     p.add_argument('--plan-out', default='grasp_plan.json')
     p.add_argument('--execute', action='store_true', help='actually publish motion')
-    p.add_argument('--yes', action='store_true', help='do not pause before each stage')
+    p.add_argument('--yes', action='store_true', help='do not pause at all (same as --confirm none)')
+    p.add_argument('--confirm', choices=['each', 'pregrasp', 'none'],
+                   help='where to wait for Enter: each = before every segment; pregrasp = only once, after the '
+                        'descent and before the hand changes to the pregrasp shape (the run starts 3 s after the '
+                        'plan is shown); default: pregrasp with --lift-place, else each')
     p.add_argument('--arm-track-tol-deg', type=float, default=6.0)
     p.add_argument('--hand-track-tol-deg', type=float, default=20.0)
     a = p.parse_args(argv)
+    if a.yes:
+        a.confirm = 'none'
+    elif a.confirm is None:
+        a.confirm = 'pregrasp' if a.lift_place is not None else 'each'
     calib = Path(__file__).resolve().parent / 'calib'
     if a.table_z is None:
         f = calib / 'verify' / 'verify.json'
@@ -276,13 +284,21 @@ def main(argv=None):
     abort, nxt, max_gap = None, time.monotonic(), 0.0
     last_loop = time.monotonic()
 
+    def needs_enter(i):
+        return args.confirm == 'each' or (args.confirm == 'pregrasp' and segs[i].name.startswith('3_hand_to_pregrasp'))
+
     def announce():
         seg = segs[k]
-        if args.yes:
-            print(f'[{seg.name}] {seg.duration:.1f} s', flush=True)
-        else:
+        if needs_enter(k):
             print(f'[{seg.name}] {seg.duration:.1f} s -- press Enter to run, Ctrl+C to stop ', end='', flush=True)
+        else:
+            print(f'[{seg.name}] {seg.duration:.1f} s', flush=True)
 
+    start_at = time.monotonic()
+    if not needs_enter(0):
+        start_at += 3.0
+        print(f'Starting in 3 s without further confirmation'
+              + (' (one Enter after the descent)' if args.confirm == 'pregrasp' else '') + '; Ctrl+C stops.', flush=True)
     announce()
     try:
         while True:
@@ -299,7 +315,7 @@ def main(argv=None):
                 if now >= hold_until:
                     break
             elif not moving:
-                if args.yes or enter_pressed():
+                if (enter_pressed() if needs_enter(k) else now >= start_at):
                     moving, seg_t0 = True, now
             if moving:
                 seg = segs[k]

@@ -435,19 +435,20 @@ python3 execute_grasp.py --grasp captures/scene01/grasps/grasps_world.npy --inde
     --obstacles captures/scene01/object_fs/object_world.npy --hand-mount calib/hand_mount.json --stop-after pregrasp --execute
 ```
 
-预期：右臂以 ≤ 5°/s 移到 pregrasp 正上方 8 cm → 手张到 pregrasp → 竖直下降到 pregrasp（手在物体旁边、未接触）。
+预期：右臂以 ≤ 10°/s 移到 pregrasp 正上方 8 cm → 手保持当前形状竖直下降到 pregrasp 位置 → 手变成 pregrasp 形状（手在物体旁边、未接触）。
 看位置是否合理（手是否真的在物体旁边、高度对不对）。然后做完整的"抓起 → 放回 → 松开 → 回默认位"：
 把上面命令里的 `--stop-after pregrasp` 换成 `--lift-place 0.10 --home`（其余不变，同样先 mock 再真机）：
 
 | 段 | 动作 |
 |---|---|
-| 1–3 | 移到 pregrasp 上方 8 cm → 手张到 pregrasp → 竖直下降到 pregrasp |
-| 4–5 | 手合到 grasp → squeeze（夹紧） |
+| 1–2 | 移到 pregrasp 上方 8 cm → 手保持当前形状（回零后是张平的）竖直下降到 pregrasp 位置 |
+| 3 | **这里停一次，按 Enter** → 手变成 pregrasp 形状 |
+| 4–5 | 手合到 grasp → squeeze（夹紧）；之后各段连续执行，不再停 |
 | p1 / p2 | **保持 squeeze**，竖直抬起 10 cm → 竖直放回原位 |
 | p3 / p4 | 手张开到 pregrasp（松开）→ 竖直抬起 8 cm |
 | h1 / h2 | 右臂回实验室默认姿态（`dual_crx_control/config/initial_pose.yaml`）→ 右手回零位 |
 
-每段开始前按 Enter（不加 `--yes`）；全程臂 ≤ 5°/s、手 ≤ 10°/s，总共约 2–3 分钟（回默认位那段最长，约 45 s）。
+加了 `--lift-place` 时默认只按**一次** Enter（`--confirm pregrasp`）：打印规划后 3 s 自动开始，下降到位后停下等 Enter，之后连续做完；随时 Ctrl+C 停止（不再发新目标）。想每段都确认：加 `--confirm each`。默认臂 ≤ 10°/s、手 ≤ 20°/s，总共约 1–1.5 分钟。
 不加 `--home` 时停在松开后的位置，可以再用部署代码自带的 `ros2 run bimanual_manipulation move_to_default_pose.py --execute` 回去。
 
 **物体放哪**：左右臂基座在 world y = 0 和 −0.91 m；物体放在正中间（y ≈ −0.48）时右手容易进到左手 0.2 m 以内或够不到，
@@ -458,8 +459,9 @@ python3 execute_grasp.py --grasp captures/scene01/grasps/grasps_world.npy --inde
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `--arm-speed-deg / --arm-accel-deg` | 5 / 10 | 每个臂关节 °/s、°/s²；> 20 °/s 拒绝 |
-| `--hand-speed-deg / --hand-accel-deg` | 10 / 20 | 每个手关节；> 30 °/s 拒绝 |
+| `--arm-speed-deg / --arm-accel-deg` | 10 / 20 | 每个臂关节 °/s、°/s²；> 20 °/s 拒绝（上限） |
+| `--hand-speed-deg / --hand-accel-deg` | 20 / 40 | 每个手关节；> 30 °/s 拒绝（上限） |
+| `--confirm` | each（有 `--lift-place` 时 pregrasp） | each：每段前按 Enter；pregrasp：只在下降后按一次；none：不停 |
 | `--wrist-frame` | scene | scene：把候选放到当前手位置上方的空中（A 节）；world：抓真实物体（E 节） |
 | `--table-z` / `--clearance` | `calib/verify/verify.json` 的桌高（无则 0）/ 0.10 m | 肘部以外及手的连杆原点必须高于桌面这么多（第 1 段只要求不低于起点） |
 | `--lift-place DZ` / `--home` | 无 | squeeze 后保持夹紧抬起 DZ 米再放回、松开、上撤；最后回默认姿态 |
@@ -489,5 +491,5 @@ python3 execute_grasp.py --grasp captures/scene01/grasps/grasps_world.npy --inde
 # 已知限制
 
 - DexLearn 训练用的是模拟单视角点云（模拟 Azure Kinect，约 0.74 m）；真实 D415 的视角和噪声不同，成功率要实测。
-- 执行时手从 pregrasp 正上方 8 cm 竖直下降；很高的物体做侧面抓取时可能需要别的接近方向。
+- 执行时手保持当前形状从 pregrasp 正上方 8 cm 竖直下降，到底后才变成 pregrasp 形状；很高的物体做侧面抓取时可能需要别的接近方向。
 - 碰撞检查是近似的（连杆原点 / 网格采样点），臂与环境只检查了与左臂的距离。
