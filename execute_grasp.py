@@ -40,6 +40,12 @@ def parse_args(argv=None):
     p.add_argument('--index', type=int, default=0, help='row if the file stores a batch')
     p.add_argument('--stop-after', choices=['pregrasp', 'grasp', 'squeeze'], default='squeeze')
     p.add_argument('--release', action='store_true', help='afterwards open to pregrasp and lift')
+    p.add_argument('--lift-place', type=float, metavar='DZ',
+                   help='after squeeze: keep squeezing, lift the object DZ m (e.g. 0.10), put it back, then open to '
+                        'pregrasp and retreat up (approach-lift); needs --stop-after squeeze, not --release')
+    p.add_argument('--home', action='store_true',
+                   help='at the end move the right arm to the lab default pose (dual_crx_control initial_pose.yaml), '
+                        'then the right hand to its zero pose')
     p.add_argument('--wrist-frame', choices=['scene', 'world'], default='scene',
                    help='scene: place the BODex scene so the grasp wrist lands on --anchor (in-air test); '
                         'world: wrist poses are already in the deployment world frame')
@@ -200,7 +206,8 @@ def main(argv=None):
             log.warning('no left arm feedback; left-arm distance check assumes left joints = 0')
         plan = planner.plan(grasp, arm_now, hand_now, anchor=args.anchor, anchor_offset=args.anchor_offset,
                             wrist_frame=args.wrist_frame, stop_after=args.stop_after, release=args.release,
-                            yaw_list=args.yaw_deg)
+                            yaw_list=args.yaw_deg, lift_place=args.lift_place,
+                            home=home_pose(len(grasp.joint_names)) if args.home else None)
     except (PlanError, ValueError) as e:
         log.error(f'PLAN REJECTED: {e}')
         return shutdown(rclpy, executor, 3)
@@ -331,9 +338,18 @@ def main(argv=None):
     print('final arm (deg):', np.round(np.degrees(st['arm']), 2).tolist())
     print('final hand err vs target (deg max):', round(math.degrees(np.abs(st['hand'] - segs[-1].hand[-1]).max()), 2))
     print(f'longest control-loop gap: {max_gap * 1000:.0f} ms')
-    print('Done. The hand keeps its last MIT target. To go home: '
-          'ros2 run bimanual_manipulation move_to_default_pose.py --execute')
+    print('Done. The hand keeps its last MIT target.' + ('' if args.home else ' To go home: '
+          'ros2 run bimanual_manipulation move_to_default_pose.py --execute'))
     return shutdown(rclpy, executor, 0)
+
+
+def home_pose(n_hand):
+    """Right arm default pose of the lab system (same file move_to_default_pose.py uses) + hand zero pose."""
+    try:
+        from dual_crx_control.robot.initial_pose import load_initial_radians
+    except ImportError as e:
+        raise PlanError(f'--home needs the lab dual_crx_control package (source ~/ws_fanuc/install/setup.bash): {e}')
+    return np.asarray(load_initial_radians()['right'], float), np.zeros(n_hand)
 
 
 def shutdown(rclpy, executor, code):

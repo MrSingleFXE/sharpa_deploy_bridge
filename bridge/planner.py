@@ -295,7 +295,11 @@ class Planner:
 
     # -- full plan
     def plan(self, grasp, arm_now, hand_now, *, anchor=None, anchor_offset=(0, 0, 0), wrist_frame='scene',
-             stop_after='squeeze', release=False, yaw_list=None):
+             stop_after='squeeze', release=False, yaw_list=None, lift_place=None, home=None):
+        """lift_place: after squeeze, lift the held object by this many metres, put it back, open to pregrasp
+        and retreat up by approach_lift. home: (arm, hand) joint targets to go to at the very end."""
+        if lift_place is not None and (stop_after != 'squeeze' or release or not 0 < lift_place <= 0.3):
+            raise PlanError('lift_place needs stop_after=squeeze, no release, and 0 < lift <= 0.3 m')
         if list(grasp.joint_names) != self.hand_names:
             raise PlanError('grasp joint order differs from hand driver order')
         arm_now, hand_now = np.asarray(arm_now, float), np.asarray(hand_now, float)
@@ -321,7 +325,8 @@ class Planner:
         best = None
         for (motion, q_app), yaw in sorted(ranked, key=lambda r: r[0][0]):
             try:
-                best = self._plan_yaw(grasp, arm_now, hand_now, anchor, yaw, stages, release, q_app)
+                best = self._plan_yaw(grasp, arm_now, hand_now, anchor, yaw, stages, release, q_app,
+                                      lift_place, home)
                 break
             except PlanError as e:
                 errors.append(f'yaw {"-" if yaw is None else round(math.degrees(yaw))}: {e}')
@@ -350,7 +355,7 @@ class Planner:
             raise PlanError('approach pose unreachable')
         return float(np.abs(sol - arm_now).max()), sol
 
-    def _plan_yaw(self, grasp, arm_now, hand_now, anchor, yaw, stages, release, sol):
+    def _plan_yaw(self, grasp, arm_now, hand_now, anchor, yaw, stages, release, sol, lift_place=None, home=None):
         S, W, approach = self._stage_poses(grasp, anchor, yaw)
         H = {s: np.asarray(grasp.hand[s], float) for s in STAGES}
         segs = [self.joint_segment('1_arm_to_approach', arm_now, sol, hand_now, hand_now),
@@ -366,6 +371,23 @@ class Planner:
             lift = self.wrist_pose(last)
             lift[2, 3] += self.lim.approach_lift
             segs.append(self.cartesian_segment('r2_lift', last, lift, H['pregrasp'], H['pregrasp']))
+        if lift_place is not None:
+            last = segs[-1].arm[-1]
+            up = self.wrist_pose(last)
+            up[2, 3] += lift_place
+            segs.append(self.cartesian_segment('p1_lift_object', last, up, H['squeeze'], H['squeeze']))
+            segs.append(self.cartesian_segment('p2_put_back', segs[-1].arm[-1], W['squeeze'], H['squeeze'], H['squeeze']))
+            last = segs[-1].arm[-1]
+            segs.append(self.joint_segment('p3_open_to_pregrasp', last, last, H['squeeze'], H['pregrasp']))
+            away = self.wrist_pose(last)
+            away[2, 3] += self.lim.approach_lift
+            segs.append(self.cartesian_segment('p4_retreat_up', last, away, H['pregrasp'], H['pregrasp']))
+        if home is not None:
+            arm_home = np.asarray(home[0], float)
+            hand_home = np.clip(np.asarray(home[1], float), self.hand_lo, self.hand_hi)
+            last, h = segs[-1].arm[-1], segs[-1].hand[-1]
+            segs.append(self.joint_segment('h1_arm_home', last, arm_home, h, h))
+            segs.append(self.joint_segment('h2_hand_home', arm_home, arm_home, h, hand_home))
         # The first move starts wherever the robot is; it may not go lower than its start
         # (minus 5 mm) when the start itself is below the requested clearance.
         start_c = self.clearance(arm_now, hand_now)[0]

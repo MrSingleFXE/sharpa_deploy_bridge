@@ -436,8 +436,23 @@ python3 execute_grasp.py --grasp captures/scene01/grasps/grasps_world.npy --inde
 ```
 
 预期：右臂以 ≤ 5°/s 移到 pregrasp 正上方 8 cm → 手张到 pregrasp → 竖直下降到 pregrasp（手在物体旁边、未接触）。
-看位置是否合理（手是否真的在物体旁边、高度对不对），再去掉 `--stop-after pregrasp`（做到 squeeze）并加 `--release`（抓完张开抬起）。
-回默认姿态：`ros2 run bimanual_manipulation move_to_default_pose.py --execute`（部署代码自带）。
+看位置是否合理（手是否真的在物体旁边、高度对不对）。然后做完整的"抓起 → 放回 → 松开 → 回默认位"：
+把上面命令里的 `--stop-after pregrasp` 换成 `--lift-place 0.10 --home`（其余不变，同样先 mock 再真机）：
+
+| 段 | 动作 |
+|---|---|
+| 1–3 | 移到 pregrasp 上方 8 cm → 手张到 pregrasp → 竖直下降到 pregrasp |
+| 4–5 | 手合到 grasp → squeeze（夹紧） |
+| p1 / p2 | **保持 squeeze**，竖直抬起 10 cm → 竖直放回原位 |
+| p3 / p4 | 手张开到 pregrasp（松开）→ 竖直抬起 8 cm |
+| h1 / h2 | 右臂回实验室默认姿态（`dual_crx_control/config/initial_pose.yaml`）→ 右手回零位 |
+
+每段开始前按 Enter（不加 `--yes`）；全程臂 ≤ 5°/s、手 ≤ 10°/s，总共约 2–3 分钟（回默认位那段最长，约 45 s）。
+不加 `--home` 时停在松开后的位置，可以再用部署代码自带的 `ros2 run bimanual_manipulation move_to_default_pose.py --execute` 回去。
+
+**物体放哪**：左右臂基座在 world y = 0 和 −0.91 m；物体放在正中间（y ≈ −0.48）时右手容易进到左手 0.2 m 以内或够不到，
+多数抓取被拒。离线统计（scene01 的前 10 个抓取平移到不同位置）：y = −0.55 约 3/10 可行，−0.65 约 4/10，−0.75 约 7/10。
+所以物体放在**中线偏右臂 20–25 cm**（相机画面里垫子偏右的位置）更容易成功。
 
 ### execute_grasp.py 主要参数（默认已很慢）
 
@@ -447,6 +462,7 @@ python3 execute_grasp.py --grasp captures/scene01/grasps/grasps_world.npy --inde
 | `--hand-speed-deg / --hand-accel-deg` | 10 / 20 | 每个手关节；> 30 °/s 拒绝 |
 | `--wrist-frame` | scene | scene：把候选放到当前手位置上方的空中（A 节）；world：抓真实物体（E 节） |
 | `--table-z` / `--clearance` | `calib/verify/verify.json` 的桌高（无则 0）/ 0.10 m | 肘部以外及手的连杆原点必须高于桌面这么多（第 1 段只要求不低于起点） |
+| `--lift-place DZ` / `--home` | 无 | squeeze 后保持夹紧抬起 DZ 米再放回、松开、上撤；最后回默认姿态 |
 | `--hand-mount` | `calib/hand_mount.json`（无则实验室占位值；`none` 强制占位值） | C 节结果；只替换规划模型里的法兰→手变换 |
 | `--obstacles` / `--obstacle-clearance` | 无 / 0.02 m | 物体点云；到 pregrasp 之前手与物体保持距离 |
 | `--stop-after` / `--release` | squeeze / 否 | 只做到某一步；抓完张手抬起 |

@@ -37,7 +37,9 @@ def main():
     planner.set_left_arm(np.radians(own.left_start_deg))
     plan = planner.plan(grasp, np.radians(own.arm_start_deg), np.zeros(22), anchor=args.anchor,
                         anchor_offset=args.anchor_offset, wrist_frame=args.wrist_frame,
-                        stop_after=args.stop_after, release=args.release, yaw_list=args.yaw_deg)
+                        stop_after=args.stop_after, release=args.release, yaw_list=args.yaw_deg,
+                        lift_place=args.lift_place,
+                        home=(np.radians(own.arm_start_deg), np.zeros(22)) if args.home else None)
     print(json.dumps(plan.report, indent=2))
     Path(args.plan_out).write_text(json.dumps(plan.report, indent=2))
     if own.samples:
