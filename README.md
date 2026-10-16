@@ -167,43 +167,50 @@ python3 calibration/make_board.py --out calib/board
 python3 calibration/make_board.py --out calib/board --set-measured 0.0300 0.0220     # 换成实测值
 ```
 
-### B.2 固定板
+### B.2 固定板（可以先把右手拆下）
 
-刚性固定（螺丝/夹具）在 J6 之后（转接件或手背），臂在起始姿态时板面朝向相机；不能装在手指上或 J5 及以前的连杆上。全程不能动。
+标定只需要"world → 右臂法兰 `right_ee_mount`"，与手无关。可以拆下 Sharpa 右手，把板用转接件/螺丝刚性固定在**法兰**上
+（板面在臂处于起始姿态时朝向相机；全程不能动）。手拆下时，下面的启动命令把手设为 mock，不会去连接真实的手。
 
 ### B.3 启动机器人（只读）和相机 ROS 驱动
 
+FANUC 状态：急停已释放、绿/黄灯正常、**不开 Free hand teaching（手动引导）**、示教器上能用点动（JOG）。
+机器人这边 PC **只读**（`read_only:=true`：只读关节状态、发布 TF，不发任何运动指令），移动右臂全部用示教器点动完成
+（建议低速，例如 10–30%）。
+
 ```bash
-# 终端 L-real（只读：PC 只读状态、发布 TF，不控制机械臂）
+# 终端 L-real：右臂真机只读 + 右手 mock（手已拆下）；手装着时也可以用这一条
 source /opt/ros/jazzy/setup.bash
 source ~/ws_fanuc/install/setup.bash
-export PYTHONPATH=/opt/sharpa-wave-sdk/python:$PYTHONPATH
-export LD_LIBRARY_PATH=/opt/sharpa-wave-sdk/lib:$LD_LIBRARY_PATH
 export ROS_DOMAIN_ID=87
 unset ROS_AUTOMATIC_DISCOVERY_RANGE
-ros2 launch bimanual_manipulation bimanual_system.launch.py crx_mock:=false sharpa_backend:=sharpa_sdk read_only:=true rviz:=true
+ros2 launch bimanual_manipulation single_arm_hand.launch.py prefix:=right_ crx_mock:=false sharpa_backend:=mock read_only:=true rviz:=true
 ```
 
-D415 的序列号（主机上同时有 D405，必须指定）：
+预期：RViz 里只有右臂（和一只 mock 手），示教器点动时 RViz 里的右臂跟着动。不跟着动就先别往下做（只读状态流有问题）。
+
+找 D415 的序列号（相机驱动启动之前）：
 
 ```bash
-# 终端 C（相机驱动启动前运行；会列出所有 RealSense）
+# 终端 C
 source ~/bodex_sharpa_deploy/venv/bin/activate
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
 python3 -c "from calibration.camera import list_devices; print(*list_devices(), sep='\n')"
 ```
+
+预期两行：`('RealSense D405', ...)` 和 `('RealSense D415', '<序列号>', ...)`。下面的 `<序列号>` 换成 D415 那一行的第二项（只写数字）。
 
 ```bash
 # 终端 K1：相机驱动（彩色 1280x720 + 对齐到彩色的深度）
 source /opt/ros/jazzy/setup.bash
 export ROS_DOMAIN_ID=87
 unset ROS_AUTOMATIC_DISCOVERY_RANGE
-ros2 launch realsense2_camera rs_launch.py serial_no:="'<D415 序列号>'" rgb_camera.color_profile:=1280,720,15 align_depth.enable:=true
+ros2 launch realsense2_camera rs_launch.py serial_no:="'<序列号>'" rgb_camera.color_profile:=1280,720,15 align_depth.enable:=true
 ```
 
-预期：`/camera/camera/color/image_raw`、`/camera/camera/color/camera_info` 有数据（`ros2 topic hz /camera/camera/color/image_raw` ≈ 15）。
-若报 `rgb_camera.color_profile` 参数不认识，去掉这个参数（用默认分辨率也行，后面的内参直接从 camera_info 读）。
-检查彩色图无畸变：`ros2 topic echo --once /camera/camera/color/camera_info | grep -A5 "^d:"` 应全为 0（RealSense 彩色流通常如此；若不为 0，`ic_config.py` 会提示）。
+预期：日志里出现 D415 的序列号并开始出流，没有 `NOT found`。另开终端检查（环境同 K1）：
+`ros2 topic hz /camera/camera/color/image_raw` ≈ 15；`ros2 topic echo --once /camera/camera/color/camera_info` 里 `width: 1280`、
+`d:` 全为 0。若报 `rgb_camera.color_profile` 不认识，去掉这个参数。
 
 ### B.4 采集（industrial_calibration_ros 的数据采集流程）
 
@@ -268,7 +275,7 @@ ros2 run industrial_calibration industrial_calibration_extrinsic_hand_eye_calibr
 
 ```bash
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
-ic_extrinsic_cli calib/ic_config.yaml calib/ic_data/<日期时间>/cal_data.yaml calib/ic_result.yaml
+ros2 run sharpa_ic_tools ic_extrinsic_cli calib/ic_config.yaml calib/ic_data/<日期时间>/cal_data.yaml calib/ic_result.yaml
 ```
 
 预期：`using N / N observations`、`Optimization converged`、残差（GUI 显示的像素误差，或 `Final cost per observation` 开方）
@@ -279,7 +286,7 @@ ic_extrinsic_cli calib/ic_config.yaml calib/ic_data/<日期时间>/cal_data.yaml
 ```bash
 # 终端 T-real（环境同 B.5）
 python3 calibration/ic_result.py calib/ic_result.yaml --config calib/ic_config.yaml
-python3 calibration/verify_extrinsics.py --camera ros --extrinsics calib/camera_extrinsics.json
+python3 calibration/verify_extrinsics.py --camera ros --extrinsics calib/camera_extrinsics.json --no-hand    # 手装着时去掉 --no-hand
 ```
 
 预期：`converged: true`；`camera_position_world_m` 在两臂之间、比基座高；`camera_viewing_direction_world` 的 z 为负；

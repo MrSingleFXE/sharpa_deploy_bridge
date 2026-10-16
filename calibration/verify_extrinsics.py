@@ -77,6 +77,7 @@ def main(argv=None):
     p.add_argument('--serial')
     p.add_argument('--table-roi', type=int, nargs=4, metavar=('X0', 'Y0', 'X1', 'Y1'),
                    help='pixel box containing mostly table (default: whole image)')
+    p.add_argument('--no-hand', action='store_true', help='do not draw the hand (e.g. hand removed for calibration)')
     p.add_argument('--out', default='calib/verify')
     p.add_argument('--urdf')
     args = p.parse_args(argv)
@@ -113,6 +114,8 @@ def main(argv=None):
         groups = {'arm': [f'right_{n}' for n in ('J1_link', 'J2_link', 'J3_link', 'J4_link', 'J5_link', 'J6_link')]
                   + [FLANGE], 'hand': [l for l in poses if l.startswith('right_') and
                                        ('fingertip' in l or l in ('right_hand_C_MC', 'right_hand_flange'))]}
+        if args.no_hand:
+            groups.pop('hand')
         colors = {'arm': (0, 255, 255), 'hand': (255, 0, 255)}
         drawn = {}
         for g, links in groups.items():
