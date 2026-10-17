@@ -25,7 +25,7 @@ mock 用域号 198 且只在本机；真机域号 87。
 
 ---
 
-# 0. 安装（只需一次，全部在 `~/bodex_sharpa_deploy` 下）
+# 0. 安装
 
 ### 0.1 更新代码
 
@@ -35,41 +35,30 @@ git pull
 git log --oneline -1
 ```
 
-### 0.2 工具环境 + FoundationStereo（约 10 分钟）
+### 0.2 工具环境 + FoundationStereo
 
 ```bash
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
 bash install/install_tools.sh
 ```
 
-建工具 venv（OpenCV、RealSense、scipy、matplotlib，可用 ROS 的 rclpy）和 `fs_venv`（PyTorch CUDA 12.8），下载 FoundationStereo
-代码和官方权重并校验 sha256。预期最后：`torch 2.x+cu128 cuda True NVIDIA GeForce RTX 5090`、两行 `ok .../model_best_bp2.pth`、`DONE`。
-权重显示 `MISSING` 时：用浏览器下载 `23-51-11`、`11-33-40` 两个文件夹放进 `~/bodex_sharpa_deploy/FoundationStereo/pretrained_models/`，
-再运行一次。
-
-### 0.3 DexLearn 推理环境（CPU，约 20–40 分钟）
+### 0.3 DexLearn 推理环境
 
 ```bash
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
 bash install/install_dexlearn_cpu.sh
 ```
 
-在 `~/bodex_sharpa_deploy/miniforge3` 建与训练相同版本的环境（Python 3.10、PyTorch 2.0.1、MinkowskiEngine 0.5.4、pytorch3d 0.7.5，CPU）
-并克隆 DexLearn 代码。预期最后：`OK torch 2.0.1+cpu | MinkowskiEngine 0.5.4 (CPU) | model class BaseModel` 和 `DONE`。
-
-### 0.4 标定工具 industrial_calibration（约 10–20 分钟，需要 sudo）
+### 0.4 标定工具 industrial_calibration
 
 ```bash
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
 bash install/install_calibration.sh
 ```
 
-apt 安装 `realsense2_camera`、vcstool、rosdep；在独立工作空间 `~/bodex_sharpa_deploy/ws_calib` 编译 industrial_calibration 1.2.0、
-industrial_calibration_ros2 1.2.0 和本仓库的 `ic_extrinsic_cli`。运行前先 `deactivate` 掉 venv。预期最后：打印各包路径和 `DONE`。
-
 ### 0.5 模型文件
 
-模型（189 MB，不在 GitHub）放在 `~/bodex_sharpa_deploy/models/dexlearn_sharpa_v3_s34_50k/`（V3 + 34 球 + kp12 + α1，8 卡 50k 步）：
+把模型文件夹 `dexlearn_sharpa_v3_s34_50k`（含 `config.yaml`、`step_050000.pth`、`MANIFEST.json`）放到 `~/bodex_sharpa_deploy/models/` 里，然后检查：
 
 ```bash
 cd ~/bodex_sharpa_deploy/models/dexlearn_sharpa_v3_s34_50k && sha256sum config.yaml step_050000.pth
@@ -77,7 +66,7 @@ cd ~/bodex_sharpa_deploy/models/dexlearn_sharpa_v3_s34_50k && sha256sum config.y
 
 预期：`45ff30f4…7ea7  config.yaml` 和 `0c5e8ca8…fd9e  step_050000.pth`。
 
-### 0.6 自检（不需要相机和机器人）
+### 0.6 自检
 
 ```bash
 # 终端 C
@@ -90,34 +79,6 @@ FS_ROOT=~/bodex_sharpa_deploy/FoundationStereo ~/bodex_sharpa_deploy/fs_venv/bin
 ```
 
 预期：前三个以 `ALL OK` 结束；最后一个打印 `captures/fs_demo: x.xx s, valid 85–95% ...`，`captures/fs_demo/fs_vis.png` 中间是清晰的深度图。
-
----
-
-# A. 空中执行一个已有候选（检查执行链）
-
-```bash
-# 终端 L-mock
-source /opt/ros/jazzy/setup.bash
-source ~/ws_fanuc/install/setup.bash
-export ROS_DOMAIN_ID=198
-export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
-ros2 launch bimanual_manipulation bimanual_system.launch.py collision_force_limit:=false
-```
-
-```bash
-# 终端 T-mock
-source /opt/ros/jazzy/setup.bash
-source ~/ws_fanuc/install/setup.bash
-source ~/bodex_sharpa_deploy/venv/bin/activate
-export ROS_DOMAIN_ID=198
-export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
-cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
-python3 execute_grasp.py --grasp examples/master_chef_can_pose000_14_grasp.npy --release
-python3 execute_grasp.py --grasp examples/master_chef_can_pose000_14_grasp.npy --release --execute
-```
-
-预期：第一条打印规划报告并以 `DRY RUN only` 结束；第二条每段按 Enter，RViz 里右臂移到当前手位置上方 15 cm 的空中、
-下降、握紧、张开抬起，最后打印 `Done`。真机写法见 E 节。
 
 ---
 
@@ -326,7 +287,15 @@ bash run_scene.sh scene01
 默认按顺序尝试 ⑤ 保留的抓取（`--index auto`），用第一个通过全部规划检查的，并打印其余被拒的原因。
 
 ```bash
-# 终端 L-mock：同 A 节
+# 终端 L-mock：模拟的双臂双手
+source /opt/ros/jazzy/setup.bash
+source ~/ws_fanuc/install/setup.bash
+export ROS_DOMAIN_ID=198
+export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+ros2 launch bimanual_manipulation bimanual_system.launch.py collision_force_limit:=false
+```
+
+```bash
 # 终端 T-mock
 source /opt/ros/jazzy/setup.bash
 source ~/ws_fanuc/install/setup.bash
@@ -377,10 +346,10 @@ python3 execute_grasp.py --grasp captures/scene01/grasps/grasps_world.npy --lift
 | `--arm-speed-deg` / `--arm-accel-deg` | 10 / 20 | 每个臂关节 °/s、°/s²；上限 20 °/s |
 | `--hand-speed-deg` / `--hand-accel-deg` | 20 / 40 | 每个手关节；上限 30 °/s |
 | `--table-z` | `calib/verify/verify.json` 的桌高 | 桌面（灰色垫子上表面）在 world 中的高度 |
-| `--clearance` | 0.005 m（world 抓取）/ 0.10 m（空中） | 肘部以外的连杆和手必须高于桌面这么多 |
+| `--clearance` | 0.005 m（world）/ 0.10 m（scene） | 肘部以外的连杆和手必须高于桌面这么多 |
 | `--hand-mount` | `calib/hand_mount.json` | C 节结果；`none` 用实验室占位值 |
 | `--obstacles` / `--obstacle-clearance` | ⑥ 记录的物体点云 / 0.02 m | 移到抓取上方时手与物体保持 0.02 m，下降时 ≥ 5 mm；`none` 不检查 |
-| `--wrist-frame` | 由抓取文件决定（world / scene） | scene：A 节的空中测试 |
+| `--wrist-frame` | 由抓取文件决定 | world：真实物体；scene：把仿真候选放到当前手位置上方 15 cm 的空中测试 |
 
 执行前自动拒绝：已有其他发送端、驱动未订阅（read_only）、碰撞力限制器非 ARMED、规划后机器人动过。
 执行中立即停发：反馈 > 0.5 s 不更新、限制器 TRIPPED、跟踪误差超过臂 6° / 手 20°、Ctrl+C。
