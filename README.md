@@ -25,9 +25,9 @@ mock 用域号 198 且只在本机；真机域号 87。
 
 ---
 
-# 0. 安装
+# A. 安装
 
-### 0.1 更新代码
+### A.1 更新代码
 
 ```bash
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
@@ -35,28 +35,28 @@ git pull
 git log --oneline -1
 ```
 
-### 0.2 工具环境 + FoundationStereo
+### A.2 工具环境 + FoundationStereo
 
 ```bash
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
 bash install/install_tools.sh
 ```
 
-### 0.3 DexLearn 推理环境
+### A.3 DexLearn 推理环境
 
 ```bash
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
 bash install/install_dexlearn_cpu.sh
 ```
 
-### 0.4 标定工具 industrial_calibration
+### A.4 标定工具 industrial_calibration
 
 ```bash
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
 bash install/install_calibration.sh
 ```
 
-### 0.5 模型文件
+### A.5 模型文件
 
 把模型文件夹 `dexlearn_sharpa_v3_s34_50k`（含 `config.yaml`、`step_050000.pth`、`MANIFEST.json`）放到 `~/bodex_sharpa_deploy/models/` 里，然后检查：
 
@@ -66,7 +66,7 @@ cd ~/bodex_sharpa_deploy/models/dexlearn_sharpa_v3_s34_50k && sha256sum config.y
 
 预期：`45ff30f4…7ea7  config.yaml` 和 `0c5e8ca8…fd9e  step_050000.pth`。
 
-### 0.6 自检
+### A.6 自检
 
 ```bash
 # 终端 C
