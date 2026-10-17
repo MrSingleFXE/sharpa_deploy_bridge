@@ -6,7 +6,6 @@ calib/
 runs/
 grasp_plan.json
 plan_*.json
-!examples/plan_mock_exec.json
 
 # server-only validation tools (contain server paths)
 server_only/
