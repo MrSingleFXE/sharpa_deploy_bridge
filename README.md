@@ -1,32 +1,31 @@
 # sharpa_deploy_bridge：用训练好的 DexLearn（Sharpa 右手）在真机上抓真实物体
 
-右臂 FANUC CRX + 右手 Sharpa Wave + 一个固定的 RealSense D415。本仓库与实验室部署代码 `~/ws_fanuc` **完全解耦**：
+右臂 FANUC CRX + 右手 Sharpa Wave + 固定的 RealSense D415。本仓库与实验室部署代码 `~/ws_fanuc` 解耦：
 不改、不编译部署代码，只通过运行中的 `bimanual_manipulation` launch 的话题通信。
 
 ```
-拍照（D415） → FoundationStereo 深度 → 物体点云 → DexLearn 生成抓取 → 过滤排序 → 转到机器人坐标 → 慢速执行
-                └──────────── 不需要标定，也不动机器人，可以随时单独看结果 ────────────┘   需要标定     需要机器人
+拍照（D415）→ FoundationStereo 深度 → 物体点云 → DexLearn 生成抓取 → 过滤排序 → 转到 world → 执行
 ```
 
-安全约定：会动机器人的命令默认**只规划不动**；加 `--execute` 后每一段都要按 Enter；Ctrl+C 只是停止发送（**不是急停**），
-真机时手放在示教器急停上；先 mock 后真机。
+安全约定：会动机器人的命令默认只规划不动，加 `--execute` 才执行；Ctrl+C 只是停止发送，**不是急停**，
+真机时手放在示教器急停上；新流程先 mock 后真机。
 
 ---
 
-## 终端类型（下文每个代码块开头都写全了环境，直接整块复制即可）
+## 终端类型（每个代码块开头都写全了环境，整块复制即可）
 
 | 名称 | 做什么 | 环境 |
 |---|---|---|
-| **L-mock / L-real** | 启动实验室部署系统 | ROS + ws_fanuc（真机再加 Sharpa SDK）+ 域号，**不激活 venv** |
+| **L-mock / L-real** | 启动实验室部署系统 | ROS + ws_fanuc（真机再加 Sharpa SDK）+ 域号，不激活 venv |
 | **T-mock / T-real** | 本仓库里要读/写机器人的脚本 | 同上 + 工具 venv |
 | **C** | 相机、点云、选抓取、离线计算 | 只激活工具 venv |
-| **K** | 相机 ROS 驱动 + industrial_calibration 标定 | ROS + `~/bodex_sharpa_deploy/ws_calib`，**不激活 venv** |
+| **K** | 相机 ROS 驱动 + industrial_calibration 标定 | ROS + `~/bodex_sharpa_deploy/ws_calib`，不激活 venv |
 
-mock 用域号 198 且只在本机；真机域号 87。FoundationStereo 和 DexLearn 各有自己的 Python，命令里直接写了它们的路径。
+mock 用域号 198 且只在本机；真机域号 87。
 
 ---
 
-# 0. 第一次使用：安装（只需做一次，全部在 `~/bodex_sharpa_deploy` 下；只有 0.4 标定工具需要 sudo）
+# 0. 安装（只需一次，全部在 `~/bodex_sharpa_deploy` 下）
 
 ### 0.1 更新代码
 
@@ -36,65 +35,49 @@ git pull
 git log --oneline -1
 ```
 
-预期：显示最新提交（与 GitHub 上一致）。
-
-### 0.2 工具环境 + FoundationStereo（约 10 分钟，主要是下载）
+### 0.2 工具环境 + FoundationStereo（约 10 分钟）
 
 ```bash
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
 bash install/install_tools.sh
 ```
 
-做了什么：建工具 venv（OpenCV、RealSense、scipy、matplotlib，能看到 ROS 的 rclpy）；建 `fs_venv`（适配 RTX 5090 的
-PyTorch CUDA 12.8 版）；下载 FoundationStereo 代码和官方权重并校验 sha256。
-预期最后几行：`torch 2.x+cu128 cuda True NVIDIA GeForce RTX 5090`，两行 `ok .../model_best_bp2.pth`，`DONE`。
-如果权重显示 `MISSING`（Google Drive 下载失败）：按提示用浏览器下载 `23-51-11`、`11-33-40` 两个文件夹放进
-`~/bodex_sharpa_deploy/FoundationStereo/pretrained_models/`，再运行一次这个脚本（会跳过已完成的部分）。
+建工具 venv（OpenCV、RealSense、scipy、matplotlib，可用 ROS 的 rclpy）和 `fs_venv`（PyTorch CUDA 12.8），下载 FoundationStereo
+代码和官方权重并校验 sha256。预期最后：`torch 2.x+cu128 cuda True NVIDIA GeForce RTX 5090`、两行 `ok .../model_best_bp2.pth`、`DONE`。
+权重显示 `MISSING` 时：用浏览器下载 `23-51-11`、`11-33-40` 两个文件夹放进 `~/bodex_sharpa_deploy/FoundationStereo/pretrained_models/`，
+再运行一次。
 
-### 0.3 DexLearn 推理环境（CPU，约 20–40 分钟，主要是编译）
+### 0.3 DexLearn 推理环境（CPU，约 20–40 分钟）
 
 ```bash
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
 bash install/install_dexlearn_cpu.sh
 ```
 
-做了什么：在 `~/bodex_sharpa_deploy/miniforge3` 装 Miniforge；建与训练时相同版本的环境（Python 3.10、PyTorch 2.0.1、
-MinkowskiEngine 0.5.4、pytorch3d 0.7.5，CPU 版，自带 gcc 和 OpenBLAS）；克隆 DexLearn 代码（与训练模型同一提交）。
-为什么用 CPU：MinkowskiEngine 在 RTX 50 系列 + CUDA 12.8 上编译很不稳定；CPU 推理 200 个抓取约 1–2 秒，足够用，
-且在服务器上验证过与训练环境结果一致（差异 ≤ 0.0002）。
-预期最后：`OK torch 2.0.1+cpu | MinkowskiEngine 0.5.4 (CPU) | model class BaseModel` 和 `DONE`。
-编译失败会打印日志最后 30 行和日志路径，把它发给我。
+在 `~/bodex_sharpa_deploy/miniforge3` 建与训练相同版本的环境（Python 3.10、PyTorch 2.0.1、MinkowskiEngine 0.5.4、pytorch3d 0.7.5，CPU）
+并克隆 DexLearn 代码。预期最后：`OK torch 2.0.1+cpu | MinkowskiEngine 0.5.4 (CPU) | model class BaseModel` 和 `DONE`。
 
-### 0.4 相机标定工具：ROS-Industrial industrial_calibration（约 10–20 分钟，需要 sudo）
+### 0.4 标定工具 industrial_calibration（约 10–20 分钟，需要 sudo）
 
 ```bash
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
 bash install/install_calibration.sh
 ```
 
-做了什么：apt 安装 RealSense ROS 2 驱动（`realsense2_camera`）、vcstool、rosdep；在**独立的** colcon 工作空间
-`~/bodex_sharpa_deploy/ws_calib`（不碰 `ws_fanuc`）编译 industrial_calibration 1.2.0（核心库 + 手眼标定图形界面）、
-industrial_calibration_ros2 1.2.0（ROS 2 采集节点 + RViz 面板）以及本仓库的 `ic_extrinsic_cli`（同一套算法的命令行版）。
-运行前先 `deactivate` 掉 venv（脚本会检查）。
-预期最后：打印 `industrial_calibration_ros`、`realsense2_camera` 的安装路径、`industrial_calibration_extrinsic_hand_eye_calibration_app`、
-`ic_extrinsic_cli` 和 `DONE`。
+apt 安装 `realsense2_camera`、vcstool、rosdep；在独立工作空间 `~/bodex_sharpa_deploy/ws_calib` 编译 industrial_calibration 1.2.0、
+industrial_calibration_ros2 1.2.0 和本仓库的 `ic_extrinsic_cli`。运行前先 `deactivate` 掉 venv。预期最后：打印各包路径和 `DONE`。
 
-### 0.5 训练好的模型文件
+### 0.5 模型文件
 
-模型（189 MB，不放在 GitHub）放在 `~/bodex_sharpa_deploy/models/dexlearn_sharpa_v3_s34_50k/`，内有 `config.yaml`、
-`step_050000.pth`、`MANIFEST.json`。检查：
+模型（189 MB，不在 GitHub）放在 `~/bodex_sharpa_deploy/models/dexlearn_sharpa_v3_s34_50k/`（V3 + 34 球 + kp12 + α1，8 卡 50k 步）：
 
 ```bash
 cd ~/bodex_sharpa_deploy/models/dexlearn_sharpa_v3_s34_50k && sha256sum config.yaml step_050000.pth
 ```
 
-预期：`45ff30f4…7ea7  config.yaml` 和 `0c5e8ca8…fd9e  step_050000.pth`（与 MANIFEST.json 一致）。
-这就是 V3 + 34 球 + kp12 + α1、8 卡 50k 步的模型（测试集全候选物理成功率 57.87%，似然 Top-10 75.88%）。
-这个文件夹不在公开仓库里（189 MB），需要单独拷到主机；目录不存在或校验不一致时先不要往下做。
-从能同时访问主机和这份模型的电脑上拷贝（例如 `rsync -a <模型所在目录>/dexlearn_sharpa_v3_s34_50k <用户>@<主机>:~/bodex_sharpa_deploy/models/`），
-或用 U 盘复制到 `~/bodex_sharpa_deploy/models/` 下。
+预期：`45ff30f4…7ea7  config.yaml` 和 `0c5e8ca8…fd9e  step_050000.pth`。
 
-### 0.6 自检（不需要相机和机器人，约 2 分钟）
+### 0.6 自检（不需要相机和机器人）
 
 ```bash
 # 终端 C
@@ -106,15 +89,14 @@ python3 calibration/test_hand_mount.py
 FS_ROOT=~/bodex_sharpa_deploy/FoundationStereo ~/bodex_sharpa_deploy/fs_venv/bin/python perception/fs_depth.py --demo captures/fs_demo
 ```
 
-预期：前三个各以 `ALL OK` 结束；最后一个打印 `captures/fs_demo: x.xx s, valid 85–95% ...`，
-`captures/fs_demo/fs_vis.png` 中间是一张清晰的彩色深度图（桌上的杯子、纸巾盒）。
+预期：前三个以 `ALL OK` 结束；最后一个打印 `captures/fs_demo: x.xx s, valid 85–95% ...`，`captures/fs_demo/fs_vis.png` 中间是清晰的深度图。
 
 ---
 
-# A. 执行一个已有候选（验证执行链；已在真机做过：在空中、高处）
+# A. 空中执行一个已有候选（检查执行链）
 
 ```bash
-# 终端 L-mock：启动模拟的双臂双手
+# 终端 L-mock
 source /opt/ros/jazzy/setup.bash
 source ~/ws_fanuc/install/setup.bash
 export ROS_DOMAIN_ID=198
@@ -122,10 +104,8 @@ export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 ros2 launch bimanual_manipulation bimanual_system.launch.py collision_force_limit:=false
 ```
 
-预期：RViz 打开，双臂双手在默认姿态。
-
 ```bash
-# 终端 T-mock：先只规划，再执行
+# 终端 T-mock
 source /opt/ros/jazzy/setup.bash
 source ~/ws_fanuc/install/setup.bash
 source ~/bodex_sharpa_deploy/venv/bin/activate
@@ -136,50 +116,39 @@ python3 execute_grasp.py --grasp examples/master_chef_can_pose000_14_grasp.npy -
 python3 execute_grasp.py --grasp examples/master_chef_can_pose000_14_grasp.npy --release --execute
 ```
 
-预期：第一条打印 JSON 规划报告（总时长约 74 s、`min_clearance_m` ≈ 0.149）并以 `DRY RUN only` 结束；
-第二条每段按 Enter 后 RViz 里右臂慢慢转动、手张开、下降、握紧、张开抬起，最后打印 `Done`。
-
-真机版本见 E 节的 L-real / T-real 写法。
+预期：第一条打印规划报告并以 `DRY RUN only` 结束；第二条每段按 Enter，RViz 里右臂移到当前手位置上方 15 cm 的空中、
+下降、握紧、张开抬起，最后打印 `Done`。真机写法见 E 节。
 
 ---
 
-# B. 相机标定：ROS-Industrial industrial_calibration + ChArUco（相机在 world 中的位置；只用右臂）
+# B. 相机标定（industrial_calibration + ChArUco；相机移动后重做）
 
-**为什么**：相机看到的点要换算到机械臂坐标系才能去抓。**怎么做**：ChArUco 板刚性固定在右臂末端，右臂摆 20–30 个姿态；
-industrial_calibration 的采集节点在每个姿态记录一张图 + TF 给出的"world → 右臂法兰 `right_ee_mount`"位姿；
-它的手眼标定（`static_camera: true`）求出 camera mount（= world）→ 相机 和 target mount（= 法兰）→ 板。
-服务器上用 industrial_calibration 1.2.0 的同一套优化跑合成数据：相机位姿误差 0.10 mm / 0.05°（从偏 5 cm / 10° 的初值也收敛到同一解）。
+ChArUco 板刚性固定在右臂法兰上，右臂摆 25–30 个姿态，求出相机在 world 中的位姿。
 
-### B.1 打印 ChArUco 板
+### B.1 标定板
+
+本实验室的板已打印，实测方格 0.035 m、码 0.026 m：
 
 ```bash
 # 终端 C
 source ~/bodex_sharpa_deploy/venv/bin/activate
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
-python3 calibration/make_board.py --out calib/board
+python3 calibration/make_board.py --out calib/board --set-measured 0.0350 0.0260
 ```
 
-预期：`ChArUco 5 cols x 7 rows, square 30.0 mm, marker 22.0 mm, DICT_5X5_100 ...`。把 `calib/board/charuco_print.pdf`
-按 **100% 实际尺寸**打印，平整贴在硬板上；用卡尺量一个方格和一个码的边长（米），写回（同时更新 industrial_calibration 的
-目标配置 `calib/board/ic_target.yaml`）：
+重新打印时：先运行 `python3 calibration/make_board.py --out calib/board`，把 `calib/board/charuco_print.pdf` 按 100% 打印、
+贴在硬板上，用卡尺量方格和码的边长（米），再用上面的 `--set-measured` 写回。
+
+### B.2 固定板
+
+可以拆下右手，把板刚性固定在法兰上（臂在起始姿态时板面朝向相机；全程不能动）。
+
+### B.3 启动机器人（只读）和相机驱动
+
+FANUC：急停已释放、不开 Free hand teaching、示教器点动（建议 10–30%）。`read_only:=true` 只读关节状态、发布 TF，不发运动指令。
 
 ```bash
-python3 calibration/make_board.py --out calib/board --set-measured 0.0350 0.0260     # 本实验室打印件的实测值（重新打印要重量）
-```
-
-### B.2 固定板（可以先把右手拆下）
-
-标定只需要"world → 右臂法兰 `right_ee_mount`"，与手无关。可以拆下 Sharpa 右手，把板用转接件/螺丝刚性固定在**法兰**上
-（板面在臂处于起始姿态时朝向相机；全程不能动）。手拆下时，下面的启动命令把手设为 mock，不会去连接真实的手。
-
-### B.3 启动机器人（只读）和相机 ROS 驱动
-
-FANUC 状态：急停已释放、绿/黄灯正常、**不开 Free hand teaching（手动引导）**、示教器上能用点动（JOG）。
-机器人这边 PC **只读**（`read_only:=true`：只读关节状态、发布 TF，不发任何运动指令），移动右臂全部用示教器点动完成
-（建议低速，例如 10–30%）。
-
-```bash
-# 终端 L-real：右臂真机只读 + 右手 mock（手已拆下）；手装着时也可以用这一条
+# 终端 L-real：右臂真机只读 + 右手 mock（手拆下或装着都可以用）
 source /opt/ros/jazzy/setup.bash
 source ~/ws_fanuc/install/setup.bash
 export ROS_DOMAIN_ID=87
@@ -187,32 +156,20 @@ unset ROS_AUTOMATIC_DISCOVERY_RANGE
 ros2 launch bimanual_manipulation single_arm_hand.launch.py prefix:=right_ crx_mock:=false sharpa_backend:=mock read_only:=true rviz:=true
 ```
 
-预期：RViz 里只有右臂（和一只 mock 手），示教器点动时 RViz 里的右臂跟着动。不跟着动就先别往下做（只读状态流有问题）。
-
-本实验室 D415 的序列号是 **347322060270**（下面已填好）。换了相机时，先在相机驱动启动之前查一下：
+预期：示教器点动时 RViz 里的右臂跟着动。
 
 ```bash
-# 终端 C
-source ~/bodex_sharpa_deploy/venv/bin/activate
-cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
-python3 -c "from calibration.camera import list_devices; print(*list_devices(), sep='\n')"
-```
-
-预期两行：`('RealSense D405', ...)` 和 `('RealSense D415', '347322060270', ...)`。不同的话，把下面命令里的序列号换成 D415 那一行的第二项。
-
-```bash
-# 终端 K1：相机驱动（彩色 1280x720 + 对齐到彩色的深度）
+# 终端 K1：相机驱动（D415 序列号 347322060270）
 source /opt/ros/jazzy/setup.bash
 export ROS_DOMAIN_ID=87
 unset ROS_AUTOMATIC_DISCOVERY_RANGE
 ros2 launch realsense2_camera rs_launch.py serial_no:="'347322060270'" rgb_camera.color_profile:=1280,720,15 align_depth.enable:=true
 ```
 
-预期：日志里出现 D415 的序列号并开始出流，没有 `NOT found`。另开终端检查（环境同 K1）：
-`ros2 topic hz /camera/camera/color/image_raw` ≈ 15；`ros2 topic echo --once /camera/camera/color/camera_info` 里 `width: 1280`、
-`d:` 全为 0。若报 `rgb_camera.color_profile` 不认识，去掉这个参数。
+预期：日志里出现序列号并开始出流。换了相机时，在相机驱动启动前用终端 C 查序列号：
+`python3 -c "from calibration.camera import list_devices; print(*list_devices(), sep='\n')"`。
 
-### B.4 采集（industrial_calibration_ros 的数据采集流程）
+### B.4 采集
 
 ```bash
 # 终端 K2
@@ -228,25 +185,24 @@ ros2 launch industrial_calibration_ros data_collection.launch.xml static_camera:
     save_path:=$PWD/calib/ic_data
 ```
 
-预期：RViz 打开，`/image_annotated` 里能看到板被识别（角点画出）。操作：示教器点动右臂（含绕不同方向转 15–35°、位置变化 ±10 cm，
-板占画面 1/5–1/2），**每停稳一次**，在 RViz 面板点采集，或在另一个终端 K3（环境同 K2）运行：
+示教器点动右臂（绕不同方向转 15–35°、位置变化 ±10 cm，板占画面 1/5–1/2），每次停稳后在 RViz 面板点采集，或在终端 K3（环境同 K2）：
 
 ```bash
 ros2 service call /trigger std_srvs/srv/Trigger
 ```
 
-终端 K2 打印 `Observation added` 才算一个样本（板没识别到就不会加）。采 25–30 个后保存：
+K2 打印 `Observation added` 才算一个样本。采 25–30 个后保存：
 
 ```bash
 ros2 service call /save std_srvs/srv/Trigger
 ```
 
-预期：返回 `success: True, message: '.../calib/ic_data/<日期时间>'`，该目录下有 `cal_data.yaml`、`images/`、`poses/`。
+预期：返回 `success: True, message: '.../calib/ic_data/<日期时间>'`。
 
-### B.5 生成标定配置（内参 + 板 + 初值）
+### B.5 生成配置（内参 + 板 + 初值）
 
 ```bash
-# 终端 T-real（相机驱动保持运行：从 camera_info 读内参）
+# 终端 T-real（相机驱动保持运行）
 source /opt/ros/jazzy/setup.bash
 source ~/ws_fanuc/install/setup.bash
 source ~/bodex_sharpa_deploy/venv/bin/activate
@@ -256,32 +212,22 @@ cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
 python3 calibration/ic_config.py --data calib/ic_data/<日期时间> --out calib/ic_config.yaml
 ```
 
-预期：`board found in N/N images`；`initial camera guess in world` 在两臂之间、比基座高；`saved calib/ic_config.yaml`。
-（初值只是给 industrial_calibration 的起点；真正的求解在下一步。）
+预期：`board found in N/N images`，`saved calib/ic_config.yaml`。
 
-### B.6 求解（industrial_calibration）
-
-图形界面（官方）：
+### B.6 求解
 
 ```bash
 # 终端 K3
 source /opt/ros/jazzy/setup.bash
 source ~/bodex_sharpa_deploy/ws_calib/install/setup.bash
-ros2 run industrial_calibration industrial_calibration_extrinsic_hand_eye_calibration_app
-```
-
-在界面里加载配置 `calib/ic_config.yaml` 和数据 `calib/ic_data/<日期时间>/cal_data.yaml`，运行标定，"Save calibration..." 保存为
-`calib/ic_result.yaml`。或者用同一套算法的命令行版（终端 K3）：
-
-```bash
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
 ros2 run sharpa_ic_tools ic_extrinsic_cli calib/ic_config.yaml calib/ic_data/<日期时间>/cal_data.yaml calib/ic_result.yaml
 ```
 
-预期：`using N / N observations`、`Optimization converged`、残差（GUI 显示的像素误差，或 `Final cost per observation` 开方）
-通常 < 1 px；3D 重投影误差几毫米以内；没有大于 0.8 的相关系数（有则说明姿态变化不够，补采）。
+也可以用官方图形界面 `ros2 run industrial_calibration industrial_calibration_extrinsic_hand_eye_calibration_app`，加载同样的两个文件，
+保存为 `calib/ic_result.yaml`。预期：`Optimization converged`，残差 < 1 px（上次 0.54 px）。
 
-### B.7 转成本仓库用的外参文件并验证
+### B.7 转换并验证
 
 ```bash
 # 终端 T-real（环境同 B.5）
@@ -289,25 +235,18 @@ python3 calibration/ic_result.py calib/ic_result.yaml --config calib/ic_config.y
 python3 calibration/verify_extrinsics.py --camera ros --extrinsics calib/camera_extrinsics.json --no-hand    # 手装着时去掉 --no-hand
 ```
 
-预期：`converged: true`；`camera_position_world_m` 在两臂之间、比基座高；`camera_viewing_direction_world` 的 z 为负；
-`calib/verify/overlay.png` 上黄圈落在右臂各关节上（紫圈是手，C 节之前可能整体偏几厘米）；`table.table_z_m` 是桌面高度（记下来）。
-标定完成后 **Ctrl+C 停掉相机驱动（终端 K1）**，否则后面 `run_scene.sh` 拍照时相机被占用。
+预期：`converged: true`；`calib/verify/overlay.png` 上黄圈落在右臂上；`table.table_z_m` 是桌面（灰色垫子上表面）高度，
+执行时自动使用（上次 −0.157 m）。完成后 Ctrl+C 停掉终端 K1，否则后面拍照时相机被占用。
 
 ---
 
-# C. 手安装外参（手相对法兰的位置；不用尺子量）
+# C. 手安装外参（手相对法兰；B 之后、换过手的安装后重做）
 
-**为什么**：DexLearn 给出的是手掌根部 `right_hand_C_MC` 的位置，机械臂要的是法兰的位置；两者之间差一个"手怎么装在法兰上"
-的固定变换，现在实验室配置里是占位值（平移 0）。**原理**：相机标好后，深度能看到手的真实位置，关节角给出法兰位置；用 Sharpa
-手自己的 CAD 网格去贴合多个视角的深度点云，求出这个变换。仿真：从偏 13 mm / 40° 的初值恢复到 0.4 mm / 0.1°。
+用 Sharpa 手的网格去贴合多个视角的深度点云，求法兰→手的变换，结果 `calib/hand_mount.json` 在执行时自动使用。
 
-### C.1 采集 5–8 个视角（拆掉标定板、装回右手；手保持一个姿态，例如张开）
+### C.1 采集 5–8 个视角
 
-只开两个终端：**L-real** 和 **T-real**。**不要开 K1 相机驱动**（如果还开着就 Ctrl+C 停掉）：本步脚本自己直接打开 D415，
-两边同时占用相机会打不开。FANUC 状态同 B.3（不开 Free hand teaching，示教器点动，低速）。
-
-与 B.3 的区别：手已装回，要读**真手**的关节角（ICP 用它摆放手的网格），所以 `sharpa_backend:=sharpa_sdk`。
-`read_only:=true` 会同时传给手节点：手只读状态，拒绝一切运动指令，也不切换 MIT 控制模式。
+拆掉标定板、装回右手。只开 L-real 和 T-real，**不开相机驱动 K1**（脚本自己打开 D415）。手只读：`read_only:=true` 也传给手节点。
 
 ```bash
 # 终端 L-real：右臂真机只读 + 右手真机只读
@@ -320,8 +259,6 @@ unset ROS_AUTOMATIC_DISCOVERY_RANGE
 ros2 launch bimanual_manipulation single_arm_hand.launch.py prefix:=right_ crx_mock:=false sharpa_backend:=sharpa_sdk read_only:=true rviz:=true
 ```
 
-预期：RViz 里右臂随示教器点动，右手的手指姿态与真手一致（用手轻轻掰一下手指能看到 RViz 跟着变则说明读到的是真手）。
-
 ```bash
 # 终端 T-real
 source /opt/ros/jazzy/setup.bash
@@ -332,13 +269,13 @@ source ~/bodex_sharpa_deploy/venv/bin/activate
 export ROS_DOMAIN_ID=87
 unset ROS_AUTOMATIC_DISCOVERY_RANGE
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
-python3 calibration/collect_hand_views.py --out calib/hand_views --table-z -0.157   # B.7 verify 得到的 table_z_m
+python3 calibration/collect_hand_views.py --out calib/hand_views --table-z -0.157
 ```
 
-操作：示教器把右臂移到手完整入镜、离相机 0.5–0.9 m、离桌面和其他物体远一些的位置，每次换一个腕部朝向，停稳按 Enter。
-预期每次：`saved calib/hand_views/view_0N (raw depth valid xx%)`。
+操作：手保持一个形状不动，示教器把右臂移到手完整入镜、离相机 0.5–0.9 m、离桌面 ≥ 10 cm 的位置，每次换一个腕部朝向，停稳按 Enter；
+按 `q` 结束。预期每次：`saved calib/hand_views/view_0N (raw depth valid xx%)`。
 
-### C.2 深度 + 求解
+### C.2 求解
 
 ```bash
 # 终端 C
@@ -348,18 +285,14 @@ FS_ROOT=~/bodex_sharpa_deploy/FoundationStereo ~/bodex_sharpa_deploy/fs_venv/bin
 python3 calibration/hand_mount_icp.py calib/hand_views/view_* --extrinsics calib/camera_extrinsics.json --out calib/hand_mount.json
 ```
 
-预期：`verdict` 为 `GOOD`（平均内点 > 70%、留一视角变化 < 2 mm / 1°）或 `USABLE`；`view_*/hand_mount_overlay.png` 里
-紫色的手与图中真实的手重合。之后执行时加 `--hand-mount calib/hand_mount.json`（只影响本仓库的规划，不改实验室配置）。
+预期：`verdict` 为 `GOOD`（上次：内点 83%，留一视角 ≤ 0.97 mm / 0.45°）；`view_*/hand_mount_overlay.png` 里紫色的手与真手重合。
 
 ---
 
-# D. 面对真实物体：点云 → DexLearn → 抓取（不需要标定，不动机器人）
+# D. 真实物体：拍照 → 点云 → DexLearn → 抓取
 
-相机是 **RealSense D415**。主机上还接着一个 D405，脚本默认只用型号含 `D415` 的设备；同型号不止一台或找不到时会报错并列出
-所有设备的序列号，这时加 `--serial <序列号>`（或 `export SHARPA_CAMERA_MODEL=<型号>` 换相机）。相机驱动（B.3 的终端 K1）
-运行时相机被占用，先 Ctrl+C 停掉它。
-
-把一个物体放在桌上右手够得到、相机看得清的位置（机械臂不要挡住），然后一条命令跑完 ①–⑤（标定做完后自动加 ⑥）：
+物体完整放在画面内、不贴画面边缘；放在两臂中线偏右臂 20–25 cm 更容易规划成功（两臂基座在 world y = 0 和 −0.91 m）。
+相机驱动 K1 不能开着。
 
 ```bash
 # 终端 C
@@ -370,27 +303,27 @@ bash run_scene.sh scene01
 
 | 步骤 | 做什么 | 预期 / 去看 |
 |---|---|---|
-| ① 拍照 | D415 拍彩色、红外左右图、RealSense 深度 | `saved captures/scene01: Intel RealSense D415 ..., baseline 55.x mm` |
-| ② FoundationStereo | 用红外左右图算深度 | 约 1–3 s；`captures/scene01/fs_vis.png`：中间（FoundationStereo）应比右边（RealSense）更完整、边缘更干净 |
-| ③ 物体点云 | 找桌面 → 取桌面以上的物体 → 桌面坐标系（z 向上） | `object_fs/overlay.png` 只有物体是红色；`height_above_table_m` ≈ 物体实际高度；`object_views.png` 三视图像该物体；`scene.ply` 可用 MeshLab 打开 |
-| ④ DexLearn | 物体移到训练场景中心、取 1024 点 → 200 个抓取（含三个姿态和似然） | 约 1–2 s（CPU）；`saved .../grasps_table.npy` |
-| ⑤ 过滤排序 | 去掉超关节限位、手碰桌、预抓时穿进物体的 → 按似然排序取前 10 | `passed` 通常 100–180 / 200；`grasps/selected_views.png`：灰 = 物体，红 = 手，应包住物体且不在桌面以下 |
-| ⑥ 转到 world | 需要 `calib/camera_extrinsics.json` | 打印前 3 个抓取的 world 坐标和下一步的执行命令 |
+| ① 拍照 | D415 彩色、红外左右图、RealSense 深度 | `saved captures/scene01: Intel RealSense D415 ...` |
+| ② FoundationStereo | 红外左右图算深度 | 约 1–3 s；`fs_vis.png` |
+| ③ 物体点云 | 找桌面 → 取桌面以上的物体 | 打印候选团并选中一个；`object_fs/overlay.png` 只有物体是红色；`height_above_table_m` ≈ 物体高度 |
+| ④ DexLearn | 1024 点 → 200 个抓取 | 约 2 s（CPU） |
+| ⑤ 过滤排序 | 去掉超手关节限位、手碰桌、预抓时穿进物体的，按似然保留前 30 | `grasps/selected_views.png`：红色的手包住灰色物体 |
+| ⑥ 转到 world | 用 `calib/camera_extrinsics.json` | 打印下一步的执行命令 |
 
-**怎么选物体**：桌面以上 0.5–30 cm 的点按 1 cm 连通成团，每团打印一行（点数、水平尺寸、像素位置、是否合格）。
-不合格的团：碰到图像边缘的（机械臂、手都是从画面边上伸进来的）、水平尺寸 > 0.30 m 的（`--max-size` 可改）。
-在合格的里面取最大的一团。所以拍照时物体要完整在画面内，不要贴着边。
+选物体：桌面以上 0.5–30 cm 的点连成团，去掉碰到画面边缘的（机械臂、人）和水平尺寸 > 0.30 m 的（`--max-size`），取剩下最大的。
+选错时在 `captures/scene01/color.png` 上找物体上一点 (u, v)：`bash run_scene.sh scene01 --skip-capture --pixel u v`。
+对比 RealSense 自带深度：`--skip-capture --depth raw`。
 
-选错了物体（例如选到了别的东西）：在 `captures/scene01/color.png` 上找物体上一个像素坐标 (u, v)，然后
-`bash run_scene.sh scene01 --skip-capture --pixel u v`。想对比 RealSense 自带深度：`--skip-capture --depth raw`。
-
-单独运行某一步、对比两种深度（`perception/compare_depth.py`）、各脚本参数：见各脚本开头说明（`python3 xxx.py --help`）。
+⑤ 只检查手本身；臂能否够到、离左臂和桌面的距离、下降路径在 E 规划时检查，所以 30 个里通常只有一部分能执行（上次 11/30）。
 
 ---
 
-# E. 执行抓取（需要 B、C；先 mock 再真机；第一次只做到 pregrasp）
+# E. 执行抓取
 
-⑥ 打印的命令形如下面这样。`--table-z` 和 `--hand-mount` 不写时，自动用 `calib/verify/verify.json` 的桌高（本实验室 −0.157 m）和 `calib/hand_mount.json`，启动时会打印用的是哪个；写了以写的为准。先在 mock 里看规划和动作：
+完整流程：移到抓取位置上方 8 cm → 手保持当前形状竖直下降 → **停一次等 Enter** → 手变成 pregrasp → grasp → squeeze →
+保持夹紧抬起 10 cm → 放回 → 张开到 pregrasp → 上撤 8 cm → 右臂回默认姿态 → 右手回零。打印规划后 3 s 自动开始，除那一次 Enter 外连续执行。
+
+默认按顺序尝试 ⑤ 保留的抓取（`--index auto`），用第一个通过全部规划检查的，并打印其余被拒的原因。
 
 ```bash
 # 终端 L-mock：同 A 节
@@ -401,16 +334,14 @@ source ~/bodex_sharpa_deploy/venv/bin/activate
 export ROS_DOMAIN_ID=198
 export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
-python3 execute_grasp.py --grasp captures/scene01/grasps/grasps_world.npy --index 0 --wrist-frame world \
-    --table-z -0.158 --clearance 0.005 \
-    --obstacles captures/scene01/object_fs/object_world.npy --hand-mount calib/hand_mount.json --stop-after pregrasp
+python3 execute_grasp.py --grasp captures/scene01/grasps/grasps_world.npy --lift-place 0.10 --home
+python3 execute_grasp.py --grasp captures/scene01/grasps/grasps_world.npy --lift-place 0.10 --home --execute
 ```
 
-预期：打印规划报告并以 `DRY RUN only` 结束。若 `PLAN REJECTED`（够不到 / 离左臂太近 / 离桌太近），换 `--index 1`、`2`…。
-确认后加 `--execute` 在 mock 里看动作。然后真机：
+预期：第一条打印 `using grasp index N` 和规划报告，以 `DRY RUN only` 结束；第二条在 RViz 里做完整流程，最后 `Done`。真机：
 
 ```bash
-# 终端 L-real（可写；保留碰撞力限制，等日志里限制器 ARMED）
+# 终端 L-real（可写；等日志里碰撞力限制器 ARMED）
 source /opt/ros/jazzy/setup.bash
 source ~/ws_fanuc/install/setup.bash
 export PYTHONPATH=/opt/sharpa-wave-sdk/python:$PYTHONPATH
@@ -430,66 +361,27 @@ source ~/bodex_sharpa_deploy/venv/bin/activate
 export ROS_DOMAIN_ID=87
 unset ROS_AUTOMATIC_DISCOVERY_RANGE
 cd ~/bodex_sharpa_deploy/sharpa_deploy_bridge
-python3 execute_grasp.py --grasp captures/scene01/grasps/grasps_world.npy --index 0 --wrist-frame world \
-    --table-z -0.158 --clearance 0.005 \
-    --obstacles captures/scene01/object_fs/object_world.npy --hand-mount calib/hand_mount.json --stop-after pregrasp --execute
+python3 execute_grasp.py --grasp captures/scene01/grasps/grasps_world.npy --lift-place 0.10 --home --execute
 ```
 
-预期：右臂以 ≤ 10°/s 移到 pregrasp 正上方 8 cm → 手保持当前形状竖直下降到 pregrasp 位置 → 手变成 pregrasp 形状（手在物体旁边、未接触）。
-看位置是否合理（手是否真的在物体旁边、高度对不对）。然后做完整的"抓起 → 放回 → 松开 → 回默认位"：
-把上面命令里的 `--stop-after pregrasp` 换成 `--lift-place 0.10 --home`（其余不变，同样先 mock 再真机）：
+不加 `--home` 时停在松开后的位置，可用部署代码自带的 `ros2 run bimanual_manipulation move_to_default_pose.py --execute` 回默认位。
 
-| 段 | 动作 |
-|---|---|
-| 1–2 | 移到 pregrasp 上方 8 cm → 手保持当前形状（回零后是张平的）竖直下降到 pregrasp 位置 |
-| 3 | **这里停一次，按 Enter** → 手变成 pregrasp 形状 |
-| 4–5 | 手合到 grasp → squeeze（夹紧）；之后各段连续执行，不再停 |
-| p1 / p2 | **保持 squeeze**，竖直抬起 10 cm → 竖直放回原位 |
-| p3 / p4 | 手张开到 pregrasp（松开）→ 竖直抬起 8 cm |
-| h1 / h2 | 右臂回实验室默认姿态（`dual_crx_control/config/initial_pose.yaml`）→ 右手回零位 |
-
-加了 `--lift-place` 时默认只按**一次** Enter（`--confirm pregrasp`）：打印规划后 3 s 自动开始，下降到位后停下等 Enter，之后连续做完；随时 Ctrl+C 停止（不再发新目标）。想每段都确认：加 `--confirm each`。默认臂 ≤ 10°/s、手 ≤ 20°/s，总共约 1–1.5 分钟。
-不加 `--home` 时停在松开后的位置，可以再用部署代码自带的 `ros2 run bimanual_manipulation move_to_default_pose.py --execute` 回去。
-
-**物体放哪**：左右臂基座在 world y = 0 和 −0.91 m；物体放在正中间（y ≈ −0.48）时右手容易进到左手 0.2 m 以内或够不到，
-多数抓取被拒。离线统计（scene01 的前 10 个抓取平移到不同位置）：y = −0.55 约 3/10 可行，−0.65 约 4/10，−0.75 约 7/10。
-所以物体放在**中线偏右臂 20–25 cm**（相机画面里垫子偏右的位置）更容易成功。
-
-### execute_grasp.py 主要参数（默认已很慢）
+### execute_grasp.py 参数
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `--arm-speed-deg / --arm-accel-deg` | 10 / 20 | 每个臂关节 °/s、°/s²；> 20 °/s 拒绝（上限） |
-| `--hand-speed-deg / --hand-accel-deg` | 20 / 40 | 每个手关节；> 30 °/s 拒绝（上限） |
-| `--confirm` | each（有 `--lift-place` 时 pregrasp） | each：每段前按 Enter；pregrasp：只在下降后按一次；none：不停 |
-| `--wrist-frame` | scene | scene：把候选放到当前手位置上方的空中（A 节）；world：抓真实物体（E 节） |
-| `--table-z` / `--clearance` | `calib/verify/verify.json` 的桌高（无则 0）/ 0.10 m | 肘部以外及手的连杆原点必须高于桌面这么多（第 1 段只要求不低于起点） |
-| `--lift-place DZ` / `--home` | 无 | squeeze 后保持夹紧抬起 DZ 米再放回、松开、上撤；最后回默认姿态 |
-| `--hand-mount` | `calib/hand_mount.json`（无则实验室占位值；`none` 强制占位值） | C 节结果；只替换规划模型里的法兰→手变换 |
-| `--obstacles` / `--obstacle-clearance` | 无 / 0.02 m | 物体点云；到 pregrasp 之前手与物体保持距离 |
-| `--stop-after` / `--release` | squeeze / 否 | 只做到某一步；抓完张手抬起 |
+| `--index` | auto | 指定用第几个抓取；auto = 第一个可行的 |
+| `--lift-place DZ` / `--home` | 无 | squeeze 后保持夹紧抬起 DZ 米再放回、松开、上撤 / 最后回默认姿态 |
+| `--confirm` | 有 `--lift-place` 时 pregrasp，否则 each | pregrasp：只在下降后按一次 Enter；each：每段前按 Enter；none：不停 |
+| `--stop-after` / `--release` | squeeze / 否 | 只做到 pregrasp / grasp；抓完直接张手抬起 |
+| `--arm-speed-deg` / `--arm-accel-deg` | 10 / 20 | 每个臂关节 °/s、°/s²；上限 20 °/s |
+| `--hand-speed-deg` / `--hand-accel-deg` | 20 / 40 | 每个手关节；上限 30 °/s |
+| `--table-z` | `calib/verify/verify.json` 的桌高 | 桌面（灰色垫子上表面）在 world 中的高度 |
+| `--clearance` | 0.005 m（world 抓取）/ 0.10 m（空中） | 肘部以外的连杆和手必须高于桌面这么多 |
+| `--hand-mount` | `calib/hand_mount.json` | C 节结果；`none` 用实验室占位值 |
+| `--obstacles` / `--obstacle-clearance` | ⑥ 记录的物体点云 / 0.02 m | 移到抓取上方时手与物体保持 0.02 m，下降时 ≥ 5 mm；`none` 不检查 |
+| `--wrist-frame` | 由抓取文件决定（world / scene） | scene：A 节的空中测试 |
 
-执行前自动拒绝：已有其他发送端（键盘/GUI）、驱动未订阅（read_only）、碰撞力限制器非 ARMED、规划后机器人动过。
-执行中立即停发：反馈 > 0.5 s 不更新、限制器 TRIPPED、跟踪误差（臂 6°、手 20°）、Ctrl+C。
-
----
-
-# 服务器上的验证（没有真机、真相机）
-
-| 部分 | 结果 |
-|---|---|
-| 相机标定：industrial_calibration 1.2.0 + ChArUco（合成数据，采集器同格式，25 张） | 相机 0.10 mm / 0.05°，手工作区 0.6 mm，残差 0.14 px；从偏 5 cm / 10° 的初值也收敛到同一解；OpenCV 4.10 打印的板被 4.6 识别且坐标系一致 |
-| FoundationStereo（官方 ViT-S，torch 2.7，无 xformers，离线） | 官方示例 960x540：2.0 s（A800），有效 90.7% |
-| 点云（合成场景，无标定 / 有标定） | 红外→彩色配准中位误差 0.28 mm；物体高度 0.121 m（真值 0.12） |
-| 真实双目图全链路（官方示例里的杯子，无标定） | 只选中杯子（12 cm）；200 个抓取 143 个通过 |
-| DexLearn 接入（100 测试场景 × 100 候选，Bench 物理评测） | 本仓库链路 53.8%，原流程 56.1%，只改随机性对照 54.4%（差异在噪声内） |
-| `install/install_dexlearn_cpu.sh`（新环境从头运行） | 克隆、编译、自检全部通过；与训练环境同输入同种子输出差 ≤ 0.0002；200 个抓取 1.3–2 s |
-| `run_scene.sh`（主机同样的目录布局，真实双目示例图） | ②–⑤ 全部通过：深度 1.3 s，杯子 12 cm，DexLearn CPU 2 s，150/200 通过 |
-| 手安装外参（合成） | 0.36 mm / 0.09° |
-| world 抓取 → 执行器（mock） | 7 段动作完成 |
-
-# 已知限制
-
-- DexLearn 训练用的是模拟单视角点云（模拟 Azure Kinect，约 0.74 m）；真实 D415 的视角和噪声不同，成功率要实测。
-- 执行时手保持当前形状从 pregrasp 正上方 8 cm 竖直下降，到底后才变成 pregrasp 形状；很高的物体做侧面抓取时可能需要别的接近方向。
-- 碰撞检查是近似的（连杆原点 / 网格采样点），臂与环境只检查了与左臂的距离。
+执行前自动拒绝：已有其他发送端、驱动未订阅（read_only）、碰撞力限制器非 ARMED、规划后机器人动过。
+执行中立即停发：反馈 > 0.5 s 不更新、限制器 TRIPPED、跟踪误差超过臂 6° / 手 20°、Ctrl+C。
+碰撞检查是近似的（连杆原点和手的网格采样点），臂与环境只检查桌面和左臂（0.2 m）。
