@@ -23,8 +23,8 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from bridge.planner import (ARM, Limits, PlanError, Planner, load_grasp, load_hand_mount,  # noqa: E402
-                            override_hand_mount)
+from bridge.planner import (ARM, Limits, PlanError, Planner, grasp_count, grasp_meta, load_grasp,  # noqa: E402
+                            load_hand_mount, override_hand_mount)
 
 ARM_TARGETS = '/crx5ia/joint_targets'
 ARM_STATES = '/crx5ia/right/joint_states'
@@ -37,7 +37,9 @@ LIMITER = '/crx5ia/collision_force_limiter/state'
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--grasp', required=True, help='BODex succgrasp *_grasp.npy or equivalent .json')
-    p.add_argument('--index', type=int, default=0, help='row if the file stores a batch')
+    p.add_argument('--index', default='auto',
+                   help='row of the grasp file; auto (default) = try rows in order (best first) and use the first '
+                        'one that passes every planning check')
     p.add_argument('--stop-after', choices=['pregrasp', 'grasp', 'squeeze'], default='squeeze')
     p.add_argument('--release', action='store_true', help='afterwards open to pregrasp and lift')
     p.add_argument('--lift-place', type=float, metavar='DZ',
@@ -46,7 +48,7 @@ def parse_args(argv=None):
     p.add_argument('--home', action='store_true',
                    help='at the end move the right arm to the lab default pose (dual_crx_control initial_pose.yaml), '
                         'then the right hand to its zero pose')
-    p.add_argument('--wrist-frame', choices=['scene', 'world'], default='scene',
+    p.add_argument('--wrist-frame', choices=['scene', 'world'],
                    help='scene: place the BODex scene so the grasp wrist lands on --anchor (in-air test); '
                         'world: wrist poses are already in the deployment world frame')
     p.add_argument('--anchor', type=float, nargs=3, metavar=('X', 'Y', 'Z'),
@@ -56,7 +58,8 @@ def parse_args(argv=None):
     p.add_argument('--yaw-deg', type=float, nargs='*', help='scene yaw(s) to try (default 0..345 step 15)')
     p.add_argument('--table-z', type=float, help='table top height in world (m); default: table_z_m of '
                                                  'calib/verify/verify.json (README B.7) if it exists, else 0')
-    p.add_argument('--clearance', type=float, default=0.10, help='min height of any moving link above table (m)')
+    p.add_argument('--clearance', type=float,
+                   help='min height of any moving link above table (m); default 0.005 for world grasps, 0.10 in-air')
     p.add_argument('--approach-lift', type=float, default=0.08)
     p.add_argument('--arm-speed-deg', type=float, default=10.0, help='per joint, deg/s (cap 20)')
     p.add_argument('--arm-accel-deg', type=float, default=20.0)
@@ -70,7 +73,8 @@ def parse_args(argv=None):
                                         'arm-flange -> hand-flange transform in the PLANNING model only; default: '
                                         'calib/hand_mount.json (README C) if it exists; "none" = lab placeholder')
     p.add_argument('--obstacles', help='object points in world (.npy, e.g. object_world.npy): the hand must keep '
-                                       '--obstacle-clearance from them until it reaches pregrasp')
+                                       '--obstacle-clearance from them until it reaches pregrasp; default: the '
+                                       'object_world.npy recorded in grasps_world.npy; "none" = no object check')
     p.add_argument('--obstacle-clearance', type=float, default=0.02)
     p.add_argument('--plan-out', default='grasp_plan.json')
     p.add_argument('--execute', action='store_true', help='actually publish motion')
@@ -82,6 +86,19 @@ def parse_args(argv=None):
     p.add_argument('--arm-track-tol-deg', type=float, default=6.0)
     p.add_argument('--hand-track-tol-deg', type=float, default=20.0)
     a = p.parse_args(argv)
+    meta = grasp_meta(a.grasp)
+    if a.wrist_frame is None:
+        a.wrist_frame = 'world' if meta.get('frame') == 'world' else 'scene'
+    if a.clearance is None:
+        a.clearance = 0.005 if a.wrist_frame == 'world' else 0.10
+    if a.obstacles is None and a.wrist_frame == 'world' and meta.get('object_world'):
+        a.obstacles = str(meta['object_world'])
+    elif a.obstacles == 'none':
+        a.obstacles = None
+    if a.obstacles and not Path(a.obstacles).exists():
+        p.error(f'obstacles file {a.obstacles} not found (give --obstacles PATH or --obstacles none)')
+    if a.index != 'auto':
+        a.index = int(a.index)
     if a.yes:
         a.confirm = 'none'
     elif a.confirm is None:
@@ -121,7 +138,8 @@ def main(argv=None):
     args = parse_args(argv)
     limits = limits_from(args)
     limits.validate()
-    grasp = load_grasp(args.grasp, args.index)
+    indices = list(range(grasp_count(args.grasp))) if args.index == 'auto' else [args.index]
+    grasp = load_grasp(args.grasp, indices[0])
 
     import rclpy
     from rclpy.executors import SingleThreadedExecutor
@@ -212,15 +230,27 @@ def main(argv=None):
             planner.set_left_arm(st['left'])
         elif any(n.startswith('left_J') for n in planner.m.joints):
             log.warning('no left arm feedback; left-arm distance check assumes left joints = 0')
-        plan = planner.plan(grasp, arm_now, hand_now, anchor=args.anchor, anchor_offset=args.anchor_offset,
-                            wrist_frame=args.wrist_frame, stop_after=args.stop_after, release=args.release,
-                            yaw_list=args.yaw_deg, lift_place=args.lift_place,
-                            home=home_pose(len(grasp.joint_names)) if args.home else None)
+        home = home_pose(len(grasp.joint_names)) if args.home else None
+        plan, rejected = None, []
+        for i in indices:
+            grasp = load_grasp(args.grasp, i)
+            try:
+                plan = planner.plan(grasp, arm_now, hand_now, anchor=args.anchor, anchor_offset=args.anchor_offset,
+                                    wrist_frame=args.wrist_frame, stop_after=args.stop_after, release=args.release,
+                                    yaw_list=args.yaw_deg, lift_place=args.lift_place, home=home)
+                break
+            except PlanError as e:
+                rejected.append(f'index {i}: {e}')
+        for r in rejected:
+            log.warning(f'rejected {r}')
+        if plan is None:
+            raise PlanError(f'all {len(indices)} grasps rejected (see above)')
+        log.info(f'using grasp index {i}' + (f' (first feasible of {len(indices)})' if len(indices) > 1 else ''))
     except (PlanError, ValueError) as e:
         log.error(f'PLAN REJECTED: {e}')
         return shutdown(rclpy, executor, 3)
 
-    report = dict(plan.report, grasp=grasp.source, limiter_state=st['limiter'],
+    report = dict(plan.report, grasp=grasp.source, rejected=rejected, limiter_state=st['limiter'],
                   hand_mount=None if not args.hand_mount else {'file': args.hand_mount, 'xyz': mount[0], 'rpy': mount[1]},
                   obstacles=args.obstacles,
                   limits={k: getattr(limits, k) for k in ('rate_hz', 'table_z', 'clearance', 'approach_lift')},

@@ -89,7 +89,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('grasps', help='grasps_table.npy')
     p.add_argument('object', help='object_table.npy')
-    p.add_argument('--top', type=int, default=10)
+    p.add_argument('--top', type=int, default=30, help='keep the best N (execute_grasp tries them in order)')
     p.add_argument('--table-tol', type=float, default=2.0, help='mm below the table still accepted (depth noise)')
     p.add_argument('--contact-mm', type=float, default=3.0)
     p.add_argument('--max-penetration', type=float, default=0.02)

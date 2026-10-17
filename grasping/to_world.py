@@ -42,19 +42,18 @@ def main(argv=None):
     out = dict(g)
     for s in STAGES:
         out[s] = np.stack([T_to_qpos(Tw @ qpos_to_T(q), q[7:]) for q in g[s]])
+    obj_world = Path(a.object_json).parent / 'object_world.npy'
     out['frame'] = 'world'
     out['T_world_table'] = Tw
+    out['object_world'] = str(obj_world.resolve())
     dst = Path(a.selected).parent / 'grasps_world.npy'
     np.save(dst, out, allow_pickle=True)
-    obj_world = Path(a.object_json).parent / 'object_world.npy'
     print(f'saved {dst}: {len(out["grasp_qpos"])} grasps (best first), table z in world {info["table_z_world_m"]} m')
     for i in range(min(3, len(out['grasp_qpos']))):
         print(f'  #{i}: grasp wrist world xyz {np.round(out["grasp_qpos"][i][:3], 3).tolist()}, '
               f'log_prob {float(g["log_prob"][i]):.1f}')
     print('\nnext (dry run first; add --execute only after reviewing the plan):')
-    print(f'  python3 execute_grasp.py --grasp {dst} --index 0 --wrist-frame world '
-          f'--table-z {info["table_z_world_m"]} --clearance 0.005 --obstacles {obj_world} '
-          f'--hand-mount calib/hand_mount.json --stop-after pregrasp')
+    print(f'  python3 execute_grasp.py --grasp {dst} --lift-place 0.10 --home')
 
 
 if __name__ == '__main__':

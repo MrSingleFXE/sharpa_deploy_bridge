@@ -33,6 +33,27 @@ class GraspInput:
     source: str
 
 
+def grasp_count(path):
+    """Number of grasps stored in a grasp file (1 for a single grasp)."""
+    path = Path(path)
+    data = np.load(path, allow_pickle=True) if path.suffix == '.npy' else json.loads(path.read_text())
+    data = data.item() if getattr(data, 'dtype', None) == object and data.shape == () else data
+    q = np.asarray(data['grasp_qpos'])
+    return len(q) if q.ndim == 2 else 1
+
+
+def grasp_meta(path):
+    """Extra keys of a grasp file written by grasping/to_world.py (frame, object_world)."""
+    path = Path(path)
+    if path.suffix != '.npy':
+        return {}
+    data = np.load(path, allow_pickle=True)
+    if not (data.dtype == object and data.shape == ()):
+        return {}
+    d = data.item()
+    return {k: d[k] for k in ('frame', 'object_world') if k in d}
+
+
 def load_grasp(path, index=0):
     """Load a BODex succgrasp .npy (dict) or a .json with the same keys."""
     path = Path(path)
@@ -324,7 +345,7 @@ class Planner:
             try:
                 ranked.append((self._approach_ik(grasp, arm_now, anchor, yaw), yaw))
             except PlanError as e:
-                errors.append(f'yaw {"-" if yaw is None else round(math.degrees(yaw))}: {e}')
+                errors.append(str(e) if yaw is None else f'yaw {round(math.degrees(yaw))}: {e}')
         best = None
         for (motion, q_app), yaw in sorted(ranked, key=lambda r: r[0][0]):
             try:
@@ -332,8 +353,10 @@ class Planner:
                                       lift_place, home)
                 break
             except PlanError as e:
-                errors.append(f'yaw {"-" if yaw is None else round(math.degrees(yaw))}: {e}')
+                errors.append(str(e) if yaw is None else f'yaw {round(math.degrees(yaw))}: {e}')
         if best is None:
+            if yaws == [None]:
+                raise PlanError(errors[0])
             raise PlanError('no feasible placement:\n  ' + '\n  '.join(errors))
         best.report['rejected_yaws'] = len(errors)
         return best
